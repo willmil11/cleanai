@@ -173,9 +173,14 @@ class Transformer:
 
            timer = timer_()
            print("Contextizing dataset...")
+           end_token = None
+           for token in self.vocab:
+               if token[1] == 100257:
+                   end_token = token[0]
+                   break
            self.contexted_dataset = []
            for item in self.dataset:
-               contexted_item = "user:\n" + item["input"] + "\nyou:\n" + item["output"]
+               contexted_item = "user:\n" + item["input"] + "\nyou:\n" + item["output"] + end_token
                self.contexted_dataset.append(contexted_item)
            print("Contextized dataset in", timer_end(timer), "ms")
            
@@ -210,7 +215,7 @@ class Transformer:
     def tokenize(self, text):
         timer = timer_()
         print("Tokenizing text...")
-        token_ids = self.encoder.encode(text)
+        token_ids = self.encoder.encode(text, allowed_special={'<|endoftext|>'})
         result = []
         for id in token_ids:
             # Search through vocab for matching id
@@ -963,7 +968,7 @@ transformer = Transformer(True, {
     "dataset": dataset
 })
 
-transformer.train(10)  # Train for 10 epochs
+transformer.train(3)
 
 try:
     while True:
