@@ -956,8 +956,8 @@ except Exception:
     exit(1)
 
 transformer = Transformer(True, {
-    "contextSize": 128,
-    "embeddingSize": 128,
+    "contextSize": 64,
+    "embeddingSize": 32,
     "learningRate": 0.001,
     "maxOutputSize": 16,
     "layersAmount": 6,
