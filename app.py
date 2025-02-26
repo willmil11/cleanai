@@ -330,7 +330,21 @@ class Transformer:
         epsilon = 0.1
         vocab_size = len(self.vocab)
         target_distribution = [(epsilon / (vocab_size - 1)) for _ in range(vocab_size)]
-        target_distribution[target_token_id] = 1.0 - epsilon
+        
+        # Find index of target_token_id in self.vocab
+        target_idx = None
+        for i, token in enumerate(self.vocab):
+            if token[1] == target_token_id:
+                target_idx = i
+                break
+        
+        if target_idx is None:
+            # Handle the case where the token ID is not found in vocabulary
+            print(f"Warning: Token ID {target_token_id} not found in vocabulary")
+            # Use a fallback to prevent error
+            target_idx = 0
+        
+        target_distribution[target_idx] = 1.0 - epsilon
 
         # Calculate cross entropy loss
         loss = 0
@@ -409,7 +423,22 @@ class Transformer:
         epsilon = 0.1
         vocab_size = len(self.vocab)
         target_distribution = [(epsilon / (vocab_size - 1)) for _ in range(vocab_size)]
-        target_distribution[target_token[1]] = 1.0 - epsilon
+        
+        # Find the index of target_token[1] in the vocabulary
+        target_idx = None
+        for i, token in enumerate(self.vocab):
+            if token[1] == target_token[1]:
+                target_idx = i
+                break
+        
+        if target_idx is None:
+            # Handle the case where the token ID is not found in vocabulary
+            print(f"Warning: Token ID {target_token[1]} not found in vocabulary")
+            # Use a fallback to prevent error
+            target_idx = 0
+        
+        # Use the correct index in the vocabulary instead of the token ID
+        target_distribution[target_idx] = 1.0 - epsilon
         
         # Calculate initial error using pure Python
         initial_error = [predicted_probs[i] - target_distribution[i] for i in range(len(predicted_probs))]
