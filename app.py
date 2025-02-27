@@ -32,6 +32,12 @@ def random(range):
 
 class Transformer:
     def __init__(self, new=False, parameters=None, path=None, vocab_path="vocabulary.json"):
+       self.adam_params = {
+           'beta1': 0.9,
+           'beta2': 0.98,
+           'epsilon': 1e-9,
+           't': 0
+       }
        print("Trying to read vocabulary file...")
        try:
            self.vocab = json.loads(open("vocabulary.json", "r").read())
@@ -57,6 +63,7 @@ class Transformer:
            self.dataset = parameters["dataset"]
            self.embeddinginitrange = parameters["embeddinginitrange"]
            self.transformer = {}
+           self.step_num = 0
            print("Initialized parameters in", timer_end(timer), "ms")
            print("Initializing layers...")
            gtimer = timer_()
@@ -206,6 +213,22 @@ class Transformer:
                self.heads = model["heads"]
                self.dataset = model["dataset"]
                self.embeddinginitrange = model["embeddinginitrange"]
+               
+               # Add this block to load Adam parameters
+               if "adam_params" in model:
+                   self.adam_params = model["adam_params"]
+               else:
+                   self.adam_params = {
+                       'beta1': 0.9,
+                       'beta2': 0.98,
+                       'epsilon': 1e-9,
+                       't': 0
+                   }
+
+               if "step_num" in model:
+                   self.step_num = model["step_num"]
+               else:
+                   self.step_num = 0
 
            except Exception:
                print("Failed to read model file, creating error...")
@@ -319,6 +342,8 @@ class Transformer:
             transformer["embeddinginitrange"] = self.embeddinginitrange
             transformer["vocab"] = self.vocab
             transformer["transformer"] = self.transformer
+            transformer["adam_params"] = self.adam_params
+            transformer["step_num"] = self.step_num  # Add this line
             json.dump(transformer, file)
         print("Model saved to", path)
 
@@ -401,13 +426,11 @@ class Transformer:
         # Initialize/update step counter and calculate learning rate
         print("Calculating learning rate...")
         timer = timer_()
-        # Replace the current learning rate calculation with:
-        warmup_steps = 4000
-        if not hasattr(self, 'step_num'):
-            self.step_num = 1
-        else:
-            self.step_num += 1
+        # Removed Adam params initialization here, since it's now in __init__
+        self.adam_params['t'] += 1
+        self.step_num += 1
 
+        warmup_steps = 4000
         base_lr = self.learningRate
         lr = base_lr * min(
             self.step_num ** (-0.5),
@@ -559,16 +582,6 @@ class Transformer:
                 embedding_gradients[i] = self.add_vectors(embedding_gradients[i], next_grad[i])
 
         print("Computed gradients in", timer_end(gtimer2), "ms")
-        
-        # Initialize Adam parameters if first step
-        if not hasattr(self, 'adam_params'):
-            self.adam_params = {
-                'beta1': 0.9,
-                'beta2': 0.98,
-                'epsilon': 1e-9,
-                't': 0
-            }
-        self.adam_params['t'] += 1
 
         print("Updating parameters...")
         timer = timer_()
@@ -671,8 +684,24 @@ class Transformer:
                                             nested_params[i][0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
 
         print("Updated parameters in", timer_end(timer), "ms")
+        sample_param = self.transformer["embeddings"][0][0]
+        print(f"Sample Adam values: momentum={sample_param[1]}, velocity={sample_param[2]}")
         print("Training step completed in", timer_end(gtimer), "ms")
         return initial_loss
+    
+    def check_adam_state(self):
+        """Print the state of some parameters to verify Adam is working"""
+        print(f"Adam step count: {self.adam_params['t']}")
+        
+        # Check a parameter from different parts of the model
+        params = [
+            self.transformer["embeddings"][0][0],
+            self.transformer["layers"][0]["weights"]["normalize_1"][0],
+            self.transformer["vocab_projection"]["weights"][0]
+        ]
+        
+        for i, param in enumerate(params):
+            print(f"Parameter {i}: value={param[0]}, momentum={param[1]}, velocity={param[2]}")
     
     def train(self, epochs=1):
         for epoch in range(epochs):
@@ -987,17 +1016,17 @@ except Exception:
 transformer = Transformer(True, {
     "contextSize": 64,
     "embeddingSize": 32,
-    "learningRate": 0.001,
+    "learningRate": 0.01,
     "maxOutputSize": 16,
-    "layersAmount": 6,
-    "heads": 8,
+    "layersAmount": 2,
+    "heads": 4,
     "weightsinitrange": [-0.1, 0.1],
     "biasesinitrange": [-0.01, 0.01],
     "embeddinginitrange": [-0.1, 0.1],
     "dataset": dataset
 })
 
-transformer.train(3)
+transformer.train(300)
 
 try:
     while True:
@@ -1009,6 +1038,9 @@ try:
         elif text == "/save":
             transformer.save()
             print("Model saved to model.json")
+            continue
+        elif text == "/check_adam":
+            transformer.check_adam_state()
             continue
         print("Input tokens:", [token[0] for token in transformer.tokenize(text)])
         output = transformer.generate(text)

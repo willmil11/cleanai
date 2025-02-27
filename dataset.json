@@ -2,5 +2,41 @@
     {
         "input": "Hey!",
         "output": "Hey, how are you?"
+    },
+    {
+        "input": "Hey there!",
+        "output": "Hey there, how are you?"
+    },
+    {
+        "input": "Hey man!",
+        "output": "Hey man, how are you?"
+    },
+    {
+        "input": "Hey friend!",
+        "output": "Hey friend, how are you?"
+    },
+    {
+        "input": "Hey stranger!",
+        "output": "Hey stranger, how are you?"
+    },
+    {
+        "input": "Hey!",
+        "output": "Hey, how are you?"
+    },
+    {
+        "input": "Hey there!",
+        "output": "Hey there, how are you?"
+    },
+    {
+        "input": "Hey!",
+        "output": "Hey, how are you?"
+    },
+    {
+        "input": "Hey you!",
+        "output": "Hey you, how are you?"
+    },
+    {
+        "input": "Hey!",
+        "output": "Hey, how are you?"
     }
 ]
