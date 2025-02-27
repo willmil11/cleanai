@@ -268,7 +268,31 @@ class Transformer:
         return positional_encodings
 
     def get_embedding(self, token_id):
-        return self.transformer["embeddings"][token_id]
+        # Find the token in vocabulary
+        vocab_idx = None
+        for i, token in enumerate(self.vocab):
+            if token[1] == token_id:
+                vocab_idx = i
+                break
+        
+        # If token is found in vocabulary, return its embedding
+        if vocab_idx is not None:
+            return self.transformer["embeddings"][vocab_idx]
+        else:
+            # Look for unknown token in vocabulary
+            unknown_idx = None
+            for i, token in enumerate(self.vocab):
+                if token[0] == "unknown" and token[1] == 16476:
+                    unknown_idx = i
+                    break
+            
+            # Use unknown token if found, otherwise use first token
+            if unknown_idx is not None:
+                print(f"Warning: Token ID {token_id} not found in vocabulary, using unknown token instead")
+                return self.transformer["embeddings"][unknown_idx]
+            else:
+                print(f"Warning: Token ID {token_id} not found in vocabulary, using first token as fallback")
+                return self.transformer["embeddings"][0]
 
     def normalize_vector(self, vector):
         # Extract float values only, handling any data type appropriately
@@ -426,16 +450,18 @@ class Transformer:
         # Initialize/update step counter and calculate learning rate
         print("Calculating learning rate...")
         timer = timer_()
-        # Removed Adam params initialization here, since it's now in __init__
         self.adam_params['t'] += 1
         self.step_num += 1
 
-        warmup_steps = 4000
+        # Modified learning rate schedule with better warmup
+        warmup_steps = 100  # Shorter for small dataset
         base_lr = self.learningRate
-        lr = base_lr * min(
-            self.step_num ** (-0.5),
-            self.step_num * (warmup_steps ** (-1.5))
-        ) * (self.embeddingSize ** (-0.5))
+        
+        if self.step_num < warmup_steps:
+            lr = base_lr * (self.step_num / warmup_steps)
+        else:
+            lr = base_lr * (warmup_steps ** 0.5) * (self.step_num ** -0.5)
+        
         print("Learning rate:", lr, "calculated in", timer_end(timer), "ms")
         
         print("Computing gradients...")
@@ -583,6 +609,40 @@ class Transformer:
 
         print("Computed gradients in", timer_end(gtimer2), "ms")
 
+        # NEW: Implement gradient clipping
+        print("Applying gradient clipping...")
+        max_grad_norm = 1.0
+        
+        # Clip embedding gradients
+        embed_grad_squared_sum = 0
+        for i in range(len(embedding_gradients)):
+            for j in range(len(embedding_gradients[i])):
+                embed_grad_squared_sum += embedding_gradients[i][j] ** 2
+        
+        embed_grad_norm = math.sqrt(embed_grad_squared_sum)
+        if embed_grad_norm > max_grad_norm:
+            scale = max_grad_norm / embed_grad_norm
+            for i in range(len(embedding_gradients)):
+                for j in range(len(embedding_gradients[i])):
+                    embedding_gradients[i][j] *= scale
+        
+        # Clip layer gradients (simplified approach)
+        for layer_idx in range(self.layersAmount):
+            for param_type in ["weights", "biases"]:
+                for key in layer_gradients[layer_idx][param_type]:
+                    if isinstance(layer_gradients[layer_idx][param_type][key], list):
+                        grad_squared_sum = 0
+                        for item in layer_gradients[layer_idx][param_type][key]:
+                            if isinstance(item, list) and len(item) > 0:
+                                grad_squared_sum += item[0] ** 2
+                            
+                        grad_norm = math.sqrt(grad_squared_sum)
+                        if grad_norm > max_grad_norm:
+                            scale = max_grad_norm / grad_norm
+                            for i in range(len(layer_gradients[layer_idx][param_type][key])):
+                                if isinstance(layer_gradients[layer_idx][param_type][key][i], list) and len(layer_gradients[layer_idx][param_type][key][i]) > 0:
+                                    layer_gradients[layer_idx][param_type][key][i][0] *= scale
+
         print("Updating parameters...")
         timer = timer_()
 
@@ -704,19 +764,190 @@ class Transformer:
             print(f"Parameter {i}: value={param[0]}, momentum={param[1]}, velocity={param[2]}")
     
     def train(self, epochs=1):
+        import threading
+        import time
+        
+        best_loss = float('inf')
+        epoch_losses = []
+        continue_training = True
+        
+        # Define sweet spot range
+        sweet_spot_min = 2.0
+        sweet_spot_max = 5.0
+        last_saved_sweet_spot_loss = float('inf')  # Track last saved loss
+        
         for epoch in range(epochs):
+            if not continue_training:
+                print(f"Training stopped at epoch {epoch}/{epochs}")
+                break
+            
+            # Add the separator for each epoch
+            print("\n" + "-"*60)
+            print(f"Epoch {epoch + 1}/{epochs}")
+            print("-"*60 + "\n")
+                
             timer = timer_()
             print("Starting epoch", epoch + 1)
+            
+            # Track losses for this epoch
+            batch_losses = []
+            
             for i in range(len(self.tokenized_dataset)):
                 stimer = timer_()
                 print("Training on item", i + 1, "/", len(self.tokenized_dataset))
                 tokens = self.tokenized_dataset[i]
+                
+                # Track dataset loss
+                dataset_total_loss = 0.0
+                sequence_positions = 0
+                
                 for j in range(len(tokens) - 1):
                     input_tokens = tokens[:j+1]
                     target_token = tokens[j+1]
                     loss = self.train_step(input_tokens, target_token)
+                    
+                    dataset_total_loss += loss
+                    sequence_positions += 1
+                    
                     print(f"Loss: {loss:.4f} (sequence position {j+1}/{len(tokens)-1})")
+                
+                # Calculate average loss for this dataset item
+                avg_item_loss = dataset_total_loss / sequence_positions
+                batch_losses.append(avg_item_loss)
+                print(f"Average loss for item {i+1}: {avg_item_loss:.4f}")
                 print("Trained on item", i + 1, "in", timer_end(stimer), "ms")
+            
+            # Calculate epoch average loss
+            avg_epoch_loss = sum(batch_losses) / len(batch_losses)
+            epoch_losses.append(avg_epoch_loss)
+            print(f"Epoch {epoch + 1} average loss: {avg_epoch_loss:.6f}")
+            
+            # Auto-save when in sweet spot with significant progress
+            in_sweet_spot = sweet_spot_min <= avg_epoch_loss <= sweet_spot_max
+            first_time_in_sweet_spot = in_sweet_spot and last_saved_sweet_spot_loss == float('inf')
+            significant_progress = in_sweet_spot and (last_saved_sweet_spot_loss - avg_epoch_loss >= 0.5)
+            
+            if first_time_in_sweet_spot or significant_progress:
+                # Format loss with 2 decimal places for filename
+                loss_str = f"{avg_epoch_loss:.2f}"
+                save_path = f"model_{epoch+1}_{loss_str}_sweetspot.json"
+                
+                if first_time_in_sweet_spot:
+                    print("\n" + "-"*60)
+                    print(f"REACHED SWEET SPOT LOSS! Auto-saving model")
+                    print("-"*60 + "\n")
+                else:
+                    print("\n" + "-"*60)
+                    print(f"SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model")
+                    print(f"Previous saved: {last_saved_sweet_spot_loss:.2f}, Current: {avg_epoch_loss:.2f}")
+                    print("-"*60 + "\n")
+                
+                try:
+                    self.save(save_path)
+                    print(f"Sweet spot model saved to {save_path}")
+                    last_saved_sweet_spot_loss = avg_epoch_loss  # Update last saved loss
+                except Exception as e:
+                    print(f"Error saving sweet spot model: {e}")
+            
+            # Check if new best loss
+            if avg_epoch_loss < best_loss:
+                best_loss = avg_epoch_loss
+                
+                # Add a clear separator for visibility
+                print("\n" + "-"*60)
+                print("NEW BEST LOSS ACHIEVED!")
+                print("-"*60 + "\n")
+                
+                print(f"New best loss: {best_loss:.6f}! Let's test the model:")
+                
+                # Let user test the model with a timeout
+                continue_testing = True
+                
+                while continue_testing:
+                    # Use a thread-based approach for input with timeout
+                    user_input = [None]
+                    input_received = [False]
+                    
+                    def input_thread_func():
+                        try:
+                            user_input[0] = input("Enter test input within 30 seconds (or /stop_training, /continue, or /save): ")
+                            input_received[0] = True
+                        except:
+                            pass
+                    
+                    # Start input thread
+                    input_thread = threading.Thread(target=input_thread_func)
+                    input_thread.daemon = True
+                    input_thread.start()
+                    
+                    # Wait for input or timeout
+                    timeout = 30
+                    start_time = time.time()
+                    while not input_received[0] and time.time() - start_time < timeout:
+                        time.sleep(0.1)
+                    
+                    if not input_received[0]:
+                        # Timeout occurred
+                        print("\nTimeout reached. Automatically continuing training...")
+                        continue_testing = False
+                        continue
+                    
+                    # Process user input
+                    test_input = user_input[0]
+                    
+                    if test_input == "/stop_training":
+                        continue_training = False
+                        continue_testing = False
+                        print("Training will stop after this epoch")
+                    elif test_input == "/continue":
+                        continue_testing = False
+                        print("Continuing training...")
+                    elif test_input == "/save":
+                        # New thread for save path input
+                        save_input = [None]
+                        save_received = [False]
+                        
+                        def save_thread_func():
+                            try:
+                                save_input[0] = input("Enter save path within 30 seconds (or press Enter for default 'model.json'): ")
+                                save_received[0] = True
+                            except:
+                                pass
+                        
+                        # Start save input thread
+                        save_thread = threading.Thread(target=save_thread_func)
+                        save_thread.daemon = True
+                        save_thread.start()
+                        
+                        # Wait for input or timeout
+                        start_time = time.time()
+                        while not save_received[0] and time.time() - start_time < timeout:
+                            time.sleep(0.1)
+                        
+                        if not save_received[0]:
+                            # Timeout occurred
+                            print("\nTimeout reached. Using default path 'model.json'")
+                            save_path = "model.json"
+                        else:
+                            save_path = save_input[0] if save_input[0] else "model.json"
+                        
+                        try:
+                            self.save(save_path)
+                            print(f"Model saved to {save_path}")
+                        except Exception as e:
+                            print(f"Error saving model: {e}")
+                    else:
+                        try:
+                            output = self.generate(test_input)
+                            print(f"Generated output: {output}")
+                        except Exception as e:
+                            print(f"Error generating output: {e}")
+            
+            # Early stopping check - stop if loss increases for 2 consecutive epochs
+            # if len(epoch_losses) >= 3 and epoch_losses[-1] > epoch_losses[-2] > epoch_losses[-3]:
+            #     print("Loss increasing for 2 consecutive epochs, stopping early")
+            #     break
+                
             print("Epoch", epoch + 1, "completed in", timer_end(timer), "ms")
     
     def inference(self, context, return_cache):
@@ -996,17 +1227,35 @@ class Transformer:
         if return_cache:
             return [self.vocab[next_token][0], next_token], cache
         return [self.vocab[next_token][0], next_token]  # Return [token_string, token_id]
-    def generate(self, context):
+    def generate(self, context, temperature=0.8):
         current_context = context
         output = ""
         
         for _ in range(self.maxOutputSize):
-            next_token = self.inference(current_context, False)
+            next_token, cache = self.inference(current_context, True)  # Get cache to access logits
+            
+            # Apply temperature to the vocab scores
+            scores = cache["vocab_scores"]
+            scaled_scores = [score / temperature for score in scores]
+            probs = self.softmax(scaled_scores)
+            
+            # Sample based on probabilities instead of taking argmax
+            random_value = random([0, 1])  # FIX: Provide range parameter [0, 1]
+            cumulative_prob = 0.0
+            next_token_idx = 0
+            
+            for i, prob in enumerate(probs):
+                cumulative_prob += prob
+                if random_value <= cumulative_prob:
+                    next_token_idx = i
+                    break
+            
+            next_token = [self.vocab[next_token_idx][0], self.vocab[next_token_idx][1]]
             
             # Check for end token (100257)
             if next_token[1] == 100257:
                 break
-                
+                    
             output += next_token[0]
             current_context += next_token[0]
         
@@ -1031,7 +1280,7 @@ transformer = Transformer(True, {
     "dataset": dataset
 })
 
-transformer.train(75)  # From 300 to 75
+transformer.train(120)
 
 try:
     while True:
