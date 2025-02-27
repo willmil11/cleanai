@@ -34,7 +34,7 @@ class Transformer:
     def __init__(self, new=False, parameters=None, path=None, vocab_path="vocabulary.json"):
        self.adam_params = {
            'beta1': 0.9,
-           'beta2': 0.98,
+           'beta2': 0.98,  # From 0.999 to 0.98 to match paper
            'epsilon': 1e-9,
            't': 0
        }
@@ -821,14 +821,19 @@ class Transformer:
                         v_vector.append(v_sum + head_biases["value"][pos][0])
                     v_vectors.append(v_vector)
 
-                # Calculate dot products between each Q and K vector
+                # Calculate dot products between each Q and K vector with causal masking
                 attention_scores = []
-                for q_vector in q_vectors:
+                for i, q_vector in enumerate(q_vectors):
                     token_scores = []
-                    for k_vector in k_vectors:
+                    for j, k_vector in enumerate(k_vectors):
                         score = self.dot_product(q_vector, k_vector)
                         # Scale by sqrt(embedding_size)
                         score /= math.sqrt(self.embeddingSize)
+                        
+                        # Apply causal masking - prevent attending to future tokens
+                        if j > i:  # If this is a future token
+                            score = float('-inf')  # Set score to negative infinity
+                            
                         token_scores.append(score)
                     attention_scores.append(token_scores)
 
@@ -1016,17 +1021,17 @@ except Exception:
 transformer = Transformer(True, {
     "contextSize": 64,
     "embeddingSize": 32,
-    "learningRate": 0.01,
+    "learningRate": 0.003,  # From 0.01 to 0.003
     "maxOutputSize": 16,
     "layersAmount": 2,
-    "heads": 4,
+    "heads": 2,  # From 4 to 2 (simpler task needs fewer heads)
     "weightsinitrange": [-0.1, 0.1],
-    "biasesinitrange": [-0.01, 0.01],
-    "embeddinginitrange": [-0.1, 0.1],
+    "weightsinitrange": [-0.07, 0.07],  # From [-0.1, 0.1]
+    "biasesinitrange": [-0.005, 0.005],  # From [-0.01, 0.01]
     "dataset": dataset
 })
 
-transformer.train(300)
+transformer.train(75)  # From 300 to 75
 
 try:
     while True:
