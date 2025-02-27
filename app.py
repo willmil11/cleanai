@@ -1019,15 +1019,15 @@ except Exception:
     exit(1)
 
 transformer = Transformer(True, {
-    "contextSize": 64,
-    "embeddingSize": 32,
-    "learningRate": 0.003,  # From 0.01 to 0.003
-    "maxOutputSize": 16,
-    "layersAmount": 2,
-    "heads": 2,  # From 4 to 2 (simpler task needs fewer heads)
-    "weightsinitrange": [-0.1, 0.1],
-    "weightsinitrange": [-0.07, 0.07],  # From [-0.1, 0.1]
-    "biasesinitrange": [-0.005, 0.005],  # From [-0.01, 0.01]
+    "contextSize": 64,              # Kept as is
+    "embeddingSize": 32,            # Kept at 32, as it was deemed appropriate for the small dataset
+    "learningRate": 0.003,          # Reduced from 0.01 to prevent overfitting
+    "maxOutputSize": 16,            # Kept as is
+    "layersAmount": 2,              # Kept at 2 layers
+    "heads": 2,                     # Reduced from 4 to match simpler task
+    "weightsinitrange": [-0.07, 0.07],  # Tightened from [-0.1, 0.1]
+    "biasesinitrange": [-0.005, 0.005],  # Reduced from [-0.01, 0.01]
+    "embeddinginitrange": [-0.07, 0.07],  # Added based on the discussion about initialization ranges
     "dataset": dataset
 })
 
