@@ -372,8 +372,13 @@ class Transformer:
             transformer["embeddinginitrange"] = self.embeddinginitrange
             transformer["vocab"] = self.vocab
             transformer["transformer"] = self.transformer
-            transformer["adam_params"] = self.adam_params
-            transformer["step_num"] = self.step_num  # Add this line
+            transformer["adam_params"] = {
+                'beta1': self.adam_params['beta1'],
+                'beta2': self.adam_params['beta2'],
+                'epsilon': self.adam_params['epsilon'],
+                't': self.adam_params['t']
+            }
+            transformer["step_num"] = self.step_num
             json.dump(transformer, file)
         print("Model saved to", path)
 
@@ -434,7 +439,7 @@ class Transformer:
         # Base case - always return a [value, momentum, velocity] list
         return [0, 0, 0]
 
-    def train_step(self, input_tokens, target_token):
+    def train_step(self, input_tokens, target_token, optimizer="sgd"):
         print("Starting training step...")
         gtimer = timer_()
         
@@ -456,19 +461,28 @@ class Transformer:
         # Initialize/update step counter and calculate learning rate
         print("Calculating learning rate...")
         timer = timer_()
-        self.adam_params['t'] += 1
+        if optimizer == "adam":
+            self.adam_params['t'] += 1
         self.step_num += 1
 
-        # Modified learning rate schedule with better warmup
-        warmup_steps = 100  # Shorter for small dataset
+        # Learning rate schedule is the same for both optimizers
+        warmup_steps = 200
+        decay_factor = 0.5
         base_lr = self.learningRate
-        
+
         if self.step_num < warmup_steps:
             lr = base_lr * (self.step_num / warmup_steps)
         else:
-            lr = base_lr * (warmup_steps ** 0.5) * (self.step_num ** -0.5)
+            lr = base_lr * (warmup_steps ** 0.5) * ((self.step_num * decay_factor) ** -0.5)
         
-        print("Learning rate:", lr, "calculated in", timer_end(timer), "ms")
+        # Apply cyclical learning rate adjustment
+        cycle_length = 50  # Steps per cycle
+        cycle_position = self.step_num % cycle_length
+        cycle_ratio = cycle_position / cycle_length
+        cycle_factor = 1.0 + math.sin(cycle_ratio * math.pi) * 0.5
+        lr = lr * cycle_factor
+        
+        print(f"Learning rate: {lr}, cyclical factor: {cycle_factor:.4f} calculated in", timer_end(timer), "ms")
         
         print("Computing gradients...")
         gtimer2 = timer_()
@@ -487,12 +501,9 @@ class Transformer:
                 break
         
         if target_idx is None:
-            # Handle the case where the token ID is not found in vocabulary
             print(f"Warning: Token ID {target_token[1]} not found in vocabulary")
-            # Use a fallback to prevent error
             target_idx = 0
         
-        # Use the correct index in the vocabulary instead of the token ID
         target_distribution[target_idx] = 1.0 - epsilon
         
         # Calculate initial error using pure Python
@@ -517,7 +528,7 @@ class Transformer:
             }
             layer_gradients.append(layer_grad)
 
-        # Backpropagate through layers
+        # Backpropagation through layers
         next_grad = error_gradients
         for layer_idx in reversed(range(self.layersAmount)):
             layer_cache = cache["layers"][layer_idx]
@@ -615,9 +626,10 @@ class Transformer:
 
         print("Computed gradients in", timer_end(gtimer2), "ms")
 
-        # NEW: Implement gradient clipping
-        print("Applying gradient clipping...")
+        # Gradient clipping and scaling
+        print("Applying gradient clipping and scaling...")
         max_grad_norm = 1.0
+        min_grad_norm = 1e-4
         
         # Clip embedding gradients
         embed_grad_squared_sum = 0
@@ -631,26 +643,20 @@ class Transformer:
             for i in range(len(embedding_gradients)):
                 for j in range(len(embedding_gradients[i])):
                     embedding_gradients[i][j] *= scale
-        
-        # Clip layer gradients (simplified approach)
-        for layer_idx in range(self.layersAmount):
-            for param_type in ["weights", "biases"]:
-                for key in layer_gradients[layer_idx][param_type]:
-                    if isinstance(layer_gradients[layer_idx][param_type][key], list):
-                        grad_squared_sum = 0
-                        for item in layer_gradients[layer_idx][param_type][key]:
-                            if isinstance(item, list) and len(item) > 0:
-                                grad_squared_sum += item[0] ** 2
-                            
-                        grad_norm = math.sqrt(grad_squared_sum)
-                        if grad_norm > max_grad_norm:
-                            scale = max_grad_norm / grad_norm
-                            for i in range(len(layer_gradients[layer_idx][param_type][key])):
-                                if isinstance(layer_gradients[layer_idx][param_type][key][i], list) and len(layer_gradients[layer_idx][param_type][key][i]) > 0:
-                                    layer_gradients[layer_idx][param_type][key][i][0] *= scale
+
+        # Scale gradients if too small but not zero
+        if 0 < embed_grad_norm < min_grad_norm:
+            scale_factor = min_grad_norm / embed_grad_norm
+            print(f"Applying gradient scaling with factor {scale_factor:.4f}")
+            for i in range(len(embedding_gradients)):
+                for j in range(len(embedding_gradients[i])):
+                    embedding_gradients[i][j] *= scale_factor
 
         print("Updating parameters...")
         timer = timer_()
+        
+        # Decide which optimizer to use
+        print(f"Using {optimizer} optimizer...")
 
         # Update embeddings
         for token_idx, (token, token_id) in enumerate(input_tokens):
@@ -658,12 +664,11 @@ class Transformer:
                 grad = embedding_gradients[token_idx][pos]
                 param = self.transformer["embeddings"][token_id][pos]  # This is a [value, momentum, velocity] list
                 
-                # Make sure param has momentum and velocity fields
-                if isinstance(param, list) and len(param) >= 3:
-                    # Handle grad whether it's a list or float
-                    grad_value = grad[0] if isinstance(grad, list) else grad
-                    
-                    # Update momentum and velocity using list indices
+                # Get gradient value
+                grad_value = grad[0] if isinstance(grad, list) else grad
+                
+                if optimizer == "adam":
+                    # Adam update
                     param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
                     param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
                     
@@ -673,7 +678,9 @@ class Transformer:
                     
                     # Update parameter value (at index 0)
                     param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
-                    
+                else:
+                    # SGD update
+                    param[0] -= lr * grad_value
 
         # Update layer parameters
         for layer_idx in range(self.layersAmount):
@@ -687,12 +694,11 @@ class Transformer:
                             grad = layer_grad[param_type][key][i]
                             param = layer[param_type][key][i]
                             
-                            # Make sure param is a list with momentum and velocity values
-                            if isinstance(param, list) and len(param) >= 3:
-                                # Handle grad whether it's a list or float
-                                grad_value = grad[0] if isinstance(grad, list) else grad
-                                
-                                # Update momentum and velocity
+                            # Get gradient value
+                            grad_value = grad[0] if isinstance(grad, list) else grad
+                            
+                            if optimizer == "adam":
+                                # Adam update
                                 param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
                                 param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
                                 
@@ -702,6 +708,9 @@ class Transformer:
                                 
                                 # Update parameter
                                 param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                            else:
+                                # SGD update
+                                param[0] -= lr * grad_value
                                 
                     elif isinstance(layer[param_type][key], dict):  # For nested structures like attention heads
                         for subkey in layer[param_type][key].keys():
@@ -717,16 +726,20 @@ class Transformer:
                                                 # Get the gradient
                                                 grad_value = head_grads[i][0] if isinstance(head_grads[i], list) else head_grads[i]
                                                 
-                                                # Update momentum and velocity
-                                                head_params[i][1] = self.adam_params['beta1'] * head_params[i][1] + (1 - self.adam_params['beta1']) * grad_value
-                                                head_params[i][2] = self.adam_params['beta2'] * head_params[i][2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
-                                                
-                                                # Compute bias-corrected estimates
-                                                m_hat = head_params[i][1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
-                                                v_hat = head_params[i][2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
-                                                
-                                                # Update parameter
-                                                head_params[i][0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                                                if optimizer == "adam":
+                                                    # Adam update
+                                                    head_params[i][1] = self.adam_params['beta1'] * head_params[i][1] + (1 - self.adam_params['beta1']) * grad_value
+                                                    head_params[i][2] = self.adam_params['beta2'] * head_params[i][2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                                                    
+                                                    # Compute bias-corrected estimates
+                                                    m_hat = head_params[i][1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                                                    v_hat = head_params[i][2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                                                    
+                                                    # Update parameter
+                                                    head_params[i][0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                                                else:
+                                                    # SGD update
+                                                    head_params[i][0] -= lr * grad_value
                             else:
                                 # For other nested dictionaries like "output"
                                 nested_params = layer[param_type][key][subkey]
@@ -738,20 +751,28 @@ class Transformer:
                                             # Get the gradient
                                             grad_value = nested_grads[i][0] if isinstance(nested_grads[i], list) else nested_grads[i]
                                             
-                                            # Update momentum and velocity
-                                            nested_params[i][1] = self.adam_params['beta1'] * nested_params[i][1] + (1 - self.adam_params['beta1']) * grad_value
-                                            nested_params[i][2] = self.adam_params['beta2'] * nested_params[i][2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
-                                            
-                                            # Compute bias-corrected estimates
-                                            m_hat = nested_params[i][1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
-                                            v_hat = nested_params[i][2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
-                                            
-                                            # Update parameter
-                                            nested_params[i][0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                                            if optimizer == "adam":
+                                                # Adam update
+                                                nested_params[i][1] = self.adam_params['beta1'] * nested_params[i][1] + (1 - self.adam_params['beta1']) * grad_value
+                                                nested_params[i][2] = self.adam_params['beta2'] * nested_params[i][2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                                                
+                                                # Compute bias-corrected estimates
+                                                m_hat = nested_params[i][1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                                                v_hat = nested_params[i][2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                                                
+                                                # Update parameter
+                                                nested_params[i][0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                                            else:
+                                                # SGD update
+                                                nested_params[i][0] -= lr * grad_value
 
         print("Updated parameters in", timer_end(timer), "ms")
-        sample_param = self.transformer["embeddings"][0][0]
-        print(f"Sample Adam values: momentum={sample_param[1]}, velocity={sample_param[2]}")
+        param_to_check = self.transformer["embeddings"][0][0]
+        if optimizer == "adam":
+            print(f"Sample Adam values: momentum={param_to_check[1]}, velocity={param_to_check[2]}")
+            self.check_adam_state()
+        else:
+            print("Using SGD - no momentum/velocity values to report")
         print("Training step completed in", timer_end(gtimer), "ms")
         return initial_loss
     
@@ -769,9 +790,22 @@ class Transformer:
         for i, param in enumerate(params):
             print(f"Parameter {i}: value={param[0]}, momentum={param[1]}, velocity={param[2]}")
     
-    def train(self, epochs=1):
+    def train(self, epochs=1, optimizer="sgd"):
+        """
+        Train the model for the specified number of epochs using the specified optimizer.
+        
+        Args:
+            epochs: Number of epochs to train for
+            optimizer: Which optimizer to use - "sgd" or "adam"
+        """
         import threading
         import time
+        
+        if optimizer not in ["sgd", "adam"]:
+            print(f"Unknown optimizer: {optimizer}, falling back to SGD")
+            optimizer = "sgd"
+        
+        print(f"\n{'='*40}\nStarting training with {optimizer} optimizer\n{'='*40}\n")
         
         best_loss = float('inf')
         epoch_losses = []
@@ -810,7 +844,7 @@ class Transformer:
                 for j in range(len(tokens) - 1):
                     input_tokens = tokens[:j+1]
                     target_token = tokens[j+1]
-                    loss = self.train_step(input_tokens, target_token)
+                    loss = self.train_step(input_tokens, target_token, optimizer)
                     
                     dataset_total_loss += loss
                     sequence_positions += 1
@@ -822,11 +856,14 @@ class Transformer:
                 batch_losses.append(avg_item_loss)
                 print(f"Average loss for item {i+1}: {avg_item_loss:.4f}")
                 print("Trained on item", i + 1, "in", timer_end(stimer), "ms")
-            
+                
             # Calculate epoch average loss
             avg_epoch_loss = sum(batch_losses) / len(batch_losses)
             epoch_losses.append(avg_epoch_loss)
             print(f"Epoch {epoch + 1} average loss: {avg_epoch_loss:.6f}")
+            
+            # Check if new best loss - if so, we'll prompt for testing
+            is_best_loss = avg_epoch_loss < best_loss
             
             # Auto-save when in sweet spot with significant progress
             in_sweet_spot = sweet_spot_min <= avg_epoch_loss <= sweet_spot_max
@@ -836,7 +873,7 @@ class Transformer:
             if first_time_in_sweet_spot or significant_progress:
                 # Format loss with 2 decimal places for filename
                 loss_str = f"{avg_epoch_loss:.2f}"
-                save_path = f"model_{epoch+1}_{loss_str}_sweetspot.json"
+                save_path = f"model_{epoch+1}_{loss_str}_{optimizer}_sweetspot.json"
                 
                 if first_time_in_sweet_spot:
                     print("\n" + "-"*60)
@@ -855,8 +892,8 @@ class Transformer:
                 except Exception as e:
                     print(f"Error saving sweet spot model: {e}")
             
-            # Check if new best loss
-            if avg_epoch_loss < best_loss:
+            # Update best loss if needed
+            if is_best_loss:
                 best_loss = avg_epoch_loss
                 
                 # Add a clear separator for visibility
@@ -865,18 +902,26 @@ class Transformer:
                 print("-"*60 + "\n")
                 
                 print(f"New best loss: {best_loss:.6f}! Let's test the model:")
-                
+            
+            # Allow testing after each epoch completion (if not already prompting for best loss)
+            should_prompt = not is_best_loss  # Only prompt if we're not already prompting for best loss
+            
+            # Prompt testing interface (used for both best loss and end of epoch)
+            if is_best_loss or should_prompt:
                 # Let user test the model with a timeout
                 continue_testing = True
                 
                 while continue_testing:
+                    # Construct appropriate prompt based on whether it's best loss or regular epoch end
+                    prompt_text = "Enter test input" if is_best_loss else f"Epoch {epoch+1} complete. Enter test input"
+                    
                     # Use a thread-based approach for input with timeout
                     user_input = [None]
                     input_received = [False]
                     
                     def input_thread_func():
                         try:
-                            user_input[0] = input("Enter test input within 30 seconds (or /stop_training, /continue, or /save): ")
+                            user_input[0] = input(f"{prompt_text} within 30 seconds (or /stop_training, /continue, /save, or /switch_to_{optimizer if optimizer == 'adam' else 'sgd'}): ")
                             input_received[0] = True
                         except:
                             pass
@@ -908,6 +953,14 @@ class Transformer:
                     elif test_input == "/continue":
                         continue_testing = False
                         print("Continuing training...")
+                    elif test_input == "/switch_to_adam" and optimizer == "sgd":
+                        continue_testing = False
+                        optimizer = "adam"
+                        print("Switching to Adam optimizer for next epochs")
+                    elif test_input == "/switch_to_sgd" and optimizer == "adam":
+                        continue_testing = False
+                        optimizer = "sgd"
+                        print("Switching to SGD optimizer for next epochs")
                     elif test_input == "/save":
                         # New thread for save path input
                         save_input = [None]
@@ -915,7 +968,7 @@ class Transformer:
                         
                         def save_thread_func():
                             try:
-                                save_input[0] = input("Enter save path within 30 seconds (or press Enter for default 'model.json'): ")
+                                save_input[0] = input(f"Enter save path within 30 seconds (or press Enter for default 'model_{optimizer}.json'): ")
                                 save_received[0] = True
                             except:
                                 pass
@@ -932,10 +985,10 @@ class Transformer:
                         
                         if not save_received[0]:
                             # Timeout occurred
-                            print("\nTimeout reached. Using default path 'model.json'")
-                            save_path = "model.json"
+                            print(f"\nTimeout reached. Using default path 'model_{optimizer}.json'")
+                            save_path = f"model_{optimizer}.json"
                         else:
-                            save_path = save_input[0] if save_input[0] else "model.json"
+                            save_path = save_input[0] if save_input[0] else f"model_{optimizer}.json"
                         
                         try:
                             self.save(save_path)
@@ -949,12 +1002,10 @@ class Transformer:
                         except Exception as e:
                             print(f"Error generating output: {e}")
             
-            # Early stopping check - stop if loss increases for 2 consecutive epochs
-            # if len(epoch_losses) >= 3 and epoch_losses[-1] > epoch_losses[-2] > epoch_losses[-3]:
-            #     print("Loss increasing for 2 consecutive epochs, stopping early")
-            #     break
-                
             print("Epoch", epoch + 1, "completed in", timer_end(timer), "ms")
+        
+        print(f"\n{'='*40}\nTraining completed after {len(epoch_losses)} epochs\nFinal loss: {epoch_losses[-1]:.6f}\nBest loss: {best_loss:.6f}\n{'='*40}\n")
+        return best_loss
     
     def inference(self, context, return_cache):
         tokenized_input = self.tokenize(context)
@@ -1273,52 +1324,29 @@ except Exception:
     print("Failed to read dataset, exiting...")
     exit(1)
 
-# transformer = Transformer(True, {
-#     "contextSize": 64,              # Kept as is
-#     "embeddingSize": 32,            # Kept at 32, as it was deemed appropriate for the small dataset
-#     "learningRate": 0.003,          # Reduced from 0.01 to prevent overfitting
-#     "maxOutputSize": 16,            # Kept as is
-#     "layersAmount": 2,              # Kept at 2 layers
-#     "heads": 2,                     # Reduced from 4 to match simpler task
-#     "weightsinitrange": [-0.07, 0.07],  # Tightened from [-0.1, 0.1]
-#     "biasesinitrange": [-0.005, 0.005],  # Reduced from [-0.01, 0.01]
-#     "embeddinginitrange": [-0.07, 0.07],  # Added based on the discussion about initialization ranges
-#     "dataset": dataset
-# })
+transformer = Transformer(True, {
+    "contextSize": 64,              
+    "embeddingSize": 32,            
+    "learningRate": 0.05,           # Increased from 0.003 for SGD
+    "maxOutputSize": 16,            
+    "layersAmount": 2,              
+    "heads": 2,                     
+    "weightsinitrange": [-0.1, 0.1],  # Slightly wider for better exploration with SGD
+    "biasesinitrange": [-0.01, 0.01], # Slightly wider for better exploration with SGD
+    "embeddinginitrange": [-0.1, 0.1],
+    "dataset": dataset
+})
 
-# transformer.train(120)
+# Explicitly set optimizer to SGD (though it's the default)
+print(f"Starting training with learning rate: {transformer.learningRate}")
+transformer.train(1000)  # Training for longer with more flexibility to stop
 
+# Interactive console
 try:
-    dataset = json.loads(open("dataset.json", "r").read())
-except Exception:
-    print("Failed to read dataset, exiting...")
-    exit(1)
-
-transformer = Transformer(new=False, path="model10eptake2.json", 
-                        parameters={"dataset": dataset})
-
-# 2. Regenerate the contexted and tokenized datasets (which aren't saved in the model file)
-end_token = None
-for token in transformer.vocab:
-    if token[1] == 100257:
-        end_token = token[0]
-        break
-
-# Recreate contexted_dataset
-transformer.contexted_dataset = []
-for item in transformer.dataset:
-    contexted_item = "user:\n" + item["input"] + "\nyou:\n" + item["output"] + end_token
-    transformer.contexted_dataset.append(contexted_item)
-
-# Recreate tokenized_dataset
-transformer.tokenized_dataset = []
-for item in transformer.contexted_dataset:
-    transformer.tokenized_dataset.append(transformer.tokenize(item))
-
-# 3. Continue training from the better starting point
-transformer.train(50)  # Add more epochs as needed
-
-try:
+    print("\nEntering interactive mode. Type a message or command:")
+    print("Commands: /save [path], /check_adam, /switch_to_adam, /switch_to_sgd")
+    current_optimizer = "sgd"  # Track current optimizer for switch commands
+    
     while True:
         text = input("> ")
         if text.startswith("/save "):
@@ -1330,8 +1358,20 @@ try:
             print("Model saved to model.json")
             continue
         elif text == "/check_adam":
-            transformer.check_adam_state()
+            if current_optimizer == "adam":
+                transformer.check_adam_state()
+            else:
+                print("Not using Adam optimizer currently")
             continue
+        elif text == "/switch_to_adam" and current_optimizer == "sgd":
+            current_optimizer = "adam"
+            print("Switched to Adam optimizer for console testing")
+            continue
+        elif text == "/switch_to_sgd" and current_optimizer == "adam":
+            current_optimizer = "sgd"
+            print("Switched to SGD optimizer for console testing")
+            continue
+        
         print("Input tokens:", [token[0] for token in transformer.tokenize(text)])
         output = transformer.generate(text)
         print("Generated output:", output)
