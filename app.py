@@ -201,7 +201,7 @@ class Transformer:
        else:
            print("Reading model from file...")
            try:
-               model = json.load(open(path, "r").read())
+               model = json.loads(open(path, "r").read())  # If using read()
                self.transformer = model["transformer"]
                self.contextSize = model["contextSize"]
                self.embeddingSize = model["embeddingSize"]
@@ -211,7 +211,13 @@ class Transformer:
                self.weightsinitrange = model["weightsinitrange"]
                self.biasesinitrange = model["biasesinitrange"]
                self.heads = model["heads"]
-               self.dataset = model["dataset"]
+               if "dataset" in model:
+                   self.dataset = model["dataset"]
+               elif parameters and "dataset" in parameters:
+                  print("Dataset not found in model file, using provided dataset")
+                  self.dataset = parameters["dataset"]
+               else:
+                  raise Exception("No dataset found in model or parameters")
                self.embeddinginitrange = model["embeddinginitrange"]
                
                # Add this block to load Adam parameters
@@ -1267,20 +1273,50 @@ except Exception:
     print("Failed to read dataset, exiting...")
     exit(1)
 
-transformer = Transformer(True, {
-    "contextSize": 64,              # Kept as is
-    "embeddingSize": 32,            # Kept at 32, as it was deemed appropriate for the small dataset
-    "learningRate": 0.003,          # Reduced from 0.01 to prevent overfitting
-    "maxOutputSize": 16,            # Kept as is
-    "layersAmount": 2,              # Kept at 2 layers
-    "heads": 2,                     # Reduced from 4 to match simpler task
-    "weightsinitrange": [-0.07, 0.07],  # Tightened from [-0.1, 0.1]
-    "biasesinitrange": [-0.005, 0.005],  # Reduced from [-0.01, 0.01]
-    "embeddinginitrange": [-0.07, 0.07],  # Added based on the discussion about initialization ranges
-    "dataset": dataset
-})
+# transformer = Transformer(True, {
+#     "contextSize": 64,              # Kept as is
+#     "embeddingSize": 32,            # Kept at 32, as it was deemed appropriate for the small dataset
+#     "learningRate": 0.003,          # Reduced from 0.01 to prevent overfitting
+#     "maxOutputSize": 16,            # Kept as is
+#     "layersAmount": 2,              # Kept at 2 layers
+#     "heads": 2,                     # Reduced from 4 to match simpler task
+#     "weightsinitrange": [-0.07, 0.07],  # Tightened from [-0.1, 0.1]
+#     "biasesinitrange": [-0.005, 0.005],  # Reduced from [-0.01, 0.01]
+#     "embeddinginitrange": [-0.07, 0.07],  # Added based on the discussion about initialization ranges
+#     "dataset": dataset
+# })
 
-transformer.train(120)
+# transformer.train(120)
+
+try:
+    dataset = json.loads(open("dataset.json", "r").read())
+except Exception:
+    print("Failed to read dataset, exiting...")
+    exit(1)
+
+transformer = Transformer(new=False, path="model10eptake2.json", 
+                        parameters={"dataset": dataset})
+
+# 2. Regenerate the contexted and tokenized datasets (which aren't saved in the model file)
+end_token = None
+for token in transformer.vocab:
+    if token[1] == 100257:
+        end_token = token[0]
+        break
+
+# Recreate contexted_dataset
+transformer.contexted_dataset = []
+for item in transformer.dataset:
+    contexted_item = "user:\n" + item["input"] + "\nyou:\n" + item["output"] + end_token
+    transformer.contexted_dataset.append(contexted_item)
+
+# Recreate tokenized_dataset
+transformer.tokenized_dataset = []
+for item in transformer.contexted_dataset:
+    transformer.tokenized_dataset.append(transformer.tokenize(item))
+
+# 3. Continue training from the better starting point
+transformer.train(50)  # Add more epochs as needed
 
 try:
     while True:
