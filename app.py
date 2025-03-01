@@ -57,7 +57,11 @@ class Transformer:
            self.learningRate = parameters["learningRate"]
            self.maxOutputSize = parameters["maxOutputSize"]
            self.layersAmount = parameters["layersAmount"]
-           self.weightsinitrange = parameters["weightsinitrange"]
+           if "use_he_init" in parameters and parameters["use_he_init"]:
+               self.weightsinitrange = self.he_init(self.embeddingSize)
+               print(f"Using He initialization with range: {self.weightsinitrange}")
+           else:
+               self.weightsinitrange = parameters["weightsinitrange"]
            self.biasesinitrange = parameters["biasesinitrange"]
            self.heads = parameters["heads"]
            self.dataset = parameters["dataset"]
@@ -240,6 +244,14 @@ class Transformer:
                print("Failed to read model file, creating error...")
                raise Exception("Failed to read model file")
            print("Successfully read model from file")
+
+    def he_init(self, fan_in):
+        """
+        He initialization for weights with ReLU activations.
+        Returns a range for random initialization.
+        """
+        scale = math.sqrt(2.0 / fan_in)
+        return [-scale, scale]
 
     def tokenize(self, text):
         timer = timer_()
@@ -439,9 +451,40 @@ class Transformer:
         # Base case - always return a [value, momentum, velocity] list
         return [0, 0, 0]
 
-    def train_step(self, input_tokens, target_token, optimizer="sgd"):
+    def train_step(self, input_tokens, target_token, optimizer="sgd", training_mode=True):
         print("Starting training step...")
         gtimer = timer_()
+        
+        # Helper function to compute global gradient norm
+        def compute_global_norm(embedding_grads, layer_grads):
+            """Compute the global norm across all parameter gradients"""
+            squared_sum = 0.0
+            
+            # Handle embedding gradients
+            for i in range(len(embedding_grads)):
+                for j in range(len(embedding_grads[i])):
+                    val = embedding_grads[i][j]
+                    squared_sum += val * val
+            
+            # Handle layer gradients - recursive traversal
+            def add_squared_grads(grad_struct):
+                nonlocal squared_sum
+                if isinstance(grad_struct, list):
+                    # If it's a list with gradients
+                    if len(grad_struct) > 0 and isinstance(grad_struct[0], (int, float)):
+                        val = grad_struct[0] if isinstance(grad_struct[0], (int, float)) else 0
+                        squared_sum += val * val
+                    return
+                elif isinstance(grad_struct, dict):
+                    # Recursively process dictionary
+                    for key, value in grad_struct.items():
+                        add_squared_grads(value)
+            
+            # Process all layer gradients
+            for layer_idx in range(len(layer_grads)):
+                add_squared_grads(layer_grads[layer_idx])
+                
+            return math.sqrt(squared_sum)
         
         # Run inference to get cache of intermediate values
         print("Running inference to get cache...")
@@ -449,7 +492,7 @@ class Transformer:
         input_text = ""
         for token, _ in input_tokens:
             input_text += token
-        _, cache = self.inference(input_text, True)
+        _, cache = self.inference(input_text, True, training_mode=training_mode)  # Pass training mode
         print("Got inference cache in", timer_end(timer), "ms")
         
         # Calculate initial loss using vocab scores from cache
@@ -465,10 +508,11 @@ class Transformer:
             self.adam_params['t'] += 1
         self.step_num += 1
 
-        # Learning rate schedule is the same for both optimizers
-        warmup_steps = 200
-        decay_factor = 0.5
+        # Learning rate schedule is the same for all optimizers
+        warmup_steps = 100  # Reduced from 200
+        decay_factor = 0.25  # From 0.5 to 0.25 for slower decay
         base_lr = self.learningRate
+        min_lr = 0.001  # Add minimum learning rate
 
         if self.step_num < warmup_steps:
             lr = base_lr * (self.step_num / warmup_steps)
@@ -482,6 +526,9 @@ class Transformer:
         cycle_factor = 1.0 + math.sin(cycle_ratio * math.pi) * 0.5
         lr = lr * cycle_factor
         
+        # Apply minimum learning rate
+        lr = max(min_lr, lr)
+        
         print(f"Learning rate: {lr}, cyclical factor: {cycle_factor:.4f} calculated in", timer_end(timer), "ms")
         
         print("Computing gradients...")
@@ -489,7 +536,7 @@ class Transformer:
         
         # Get predicted probabilities and compute error gradients
         predicted_probs = self.softmax(cache["vocab_scores"])
-        epsilon = 0.1
+        epsilon = 0.05  # Reduced from 0.1 for better gradient signals
         vocab_size = len(self.vocab)
         target_distribution = [(epsilon / (vocab_size - 1)) for _ in range(vocab_size)]
         
@@ -516,7 +563,6 @@ class Transformer:
         for j in range(self.embeddingSize):
             for k in range(len(self.vocab)):
                 error_gradients[-1][j] += initial_error[k] * self.transformer["vocab_projection"]["weights"][k * self.embeddingSize + j][0]
-        next_grad = error_gradients
         
         # Initialize gradient accumulators
         embedding_gradients = [[0 for _ in range(self.embeddingSize)] for _ in range(len(input_tokens))]
@@ -536,6 +582,7 @@ class Transformer:
             # Feed Forward gradients
             ff_out_grad = [row[:] for row in next_grad]  # Deep copy
             shrink_grad = [[0.0 for _ in range(self.embeddingSize * 4)] for _ in range(len(input_tokens))]
+            
             for i in range(len(input_tokens)):
                 for j in range(self.embeddingSize):
                     for k in range(self.embeddingSize * 4):
@@ -546,6 +593,8 @@ class Transformer:
 
             # Attention gradients
             att_grad = [[0.0 for _ in range(self.embeddingSize)] for _ in range(len(input_tokens))]
+            
+            # Accumulate gradients from all heads
             for head in range(self.heads):
                 head_cache = layer_cache["heads"][head]
                 
@@ -586,14 +635,15 @@ class Transformer:
                 for i in range(len(input_tokens)):
                     for j in range(self.embeddingSize):
                         for k in range(len(input_tokens)):
-                            att_grad[i][j] += attention_grad[i][k] * v_grad[k][j]
+                            att_grad[i][j] += head_cache["attention_probs"][i][k] * v_grad[k][j]
 
-            # After accumulating attention gradients for each head:
-            # Update output projection weights/biases
+            # Fixed: Properly combine all head outputs
             for i in range(len(input_tokens)):
                 concatenated = []
+                # Get outputs from ALL heads, not just the last one
                 for head_idx in range(self.heads):
-                    concatenated.extend(head_cache["output"][i])
+                    concatenated.extend(layer_cache["heads"][head_idx]["output"][i])
+                    
                 for j in range(self.embeddingSize):
                     for k in range(self.embeddingSize * self.heads):
                         layer_gradients[layer_idx]["weights"]["attention"]["output"][j * (self.embeddingSize * self.heads) + k][0] += next_grad[i][j] * concatenated[k]
@@ -605,17 +655,11 @@ class Transformer:
                     layer_gradients[layer_idx]["weights"]["normalize_2"][j][0] += next_grad[i][j] * layer_cache["normalized"][i][j]
                     layer_gradients[layer_idx]["biases"]["normalize_2"][j][0] += next_grad[i][j]
 
-            # After layer norm gradients
+            # First layer normalization gradients
             for i in range(len(input_tokens)):
                 for j in range(self.embeddingSize):
                     layer_gradients[layer_idx]["weights"]["normalize_1"][j][0] += next_grad[i][j] * layer_cache["normalized"][i][j]
                     layer_gradients[layer_idx]["biases"]["normalize_1"][j][0] += next_grad[i][j]
-
-            # And for attention output
-            for j in range(self.embeddingSize):
-                for k in range(self.embeddingSize * self.heads):
-                    layer_gradients[layer_idx]["weights"]["attention"]["output"][j * (self.embeddingSize * self.heads) + k][0] += next_grad[i][j] * concatenated[k]
-                layer_gradients[layer_idx]["biases"]["attention"]["output"][j][0] += next_grad[i][j]
 
             # Combine gradients for next layer
             next_grad = [[next_grad[i][j] + att_grad[i][j] for j in range(self.embeddingSize)] for i in range(len(input_tokens))]
@@ -626,61 +670,102 @@ class Transformer:
 
         print("Computed gradients in", timer_end(gtimer2), "ms")
 
-        # Gradient clipping and scaling
+        # Better gradient clipping
         print("Applying gradient clipping and scaling...")
-        max_grad_norm = 1.0
-        min_grad_norm = 1e-4
+        timer = timer_()
         
-        # Clip embedding gradients
-        embed_grad_squared_sum = 0
-        for i in range(len(embedding_gradients)):
-            for j in range(len(embedding_gradients[i])):
-                embed_grad_squared_sum += embedding_gradients[i][j] ** 2
+        # Adaptive clipping thresholds based on training progress
+        max_grad_norm = 5.0
+        if self.step_num > 1000:
+            max_grad_norm = 3.0
         
-        embed_grad_norm = math.sqrt(embed_grad_squared_sum)
-        if embed_grad_norm > max_grad_norm:
-            scale = max_grad_norm / embed_grad_norm
+        # Compute global norm using our helper function
+        global_grad_norm = compute_global_norm(embedding_gradients, layer_gradients)
+        print(f"Global gradient norm: {global_grad_norm:.6f}")
+        
+        # Apply clipping if needed
+        if global_grad_norm > max_grad_norm:
+            scaling_factor = max_grad_norm / global_grad_norm
+            print(f"Clipping gradients with factor {scaling_factor:.6f}")
+            
+            # Scale embedding gradients
             for i in range(len(embedding_gradients)):
                 for j in range(len(embedding_gradients[i])):
-                    embedding_gradients[i][j] *= scale
-
-        # Scale gradients if too small but not zero
-        if 0 < embed_grad_norm < min_grad_norm:
-            scale_factor = min_grad_norm / embed_grad_norm
-            print(f"Applying gradient scaling with factor {scale_factor:.4f}")
-            for i in range(len(embedding_gradients)):
-                for j in range(len(embedding_gradients[i])):
-                    embedding_gradients[i][j] *= scale_factor
-
+                    embedding_gradients[i][j] *= scaling_factor
+            
+            # Scale layer gradients - recursive function
+            def scale_gradients(grad_struct, factor):
+                if isinstance(grad_struct, list):
+                    # If it's a list with a gradient value
+                    if len(grad_struct) > 0 and isinstance(grad_struct[0], (int, float)):
+                        grad_struct[0] *= factor
+                    return
+                elif isinstance(grad_struct, dict):
+                    # Recursively process dictionary
+                    for key, value in grad_struct.items():
+                        scale_gradients(value, factor)
+            
+            # Apply scaling to all layer gradients
+            for layer_idx in range(len(layer_gradients)):
+                scale_gradients(layer_gradients[layer_idx], scaling_factor)
+        
+        print("Applied gradient clipping in", timer_end(timer), "ms")
+        
         print("Updating parameters...")
         timer = timer_()
         
         # Decide which optimizer to use
         print(f"Using {optimizer} optimizer...")
+        
+        # Weight decay parameter
+        weight_decay = 1e-5  # L2 regularization factor
+
+        # For SGD with momentum
+        momentum_factor = 0.5  # Classic momentum value
+        if optimizer == "sgd_momentum" and not hasattr(self, 'momentum_initialized'):
+            print("Initializing momentum for first use")
+            self.momentum_initialized = True
 
         # Update embeddings
+        vocab_indices = {}  # Track which token indices we've updated
         for token_idx, (token, token_id) in enumerate(input_tokens):
-            for pos in range(self.embeddingSize):
-                grad = embedding_gradients[token_idx][pos]
-                param = self.transformer["embeddings"][token_id][pos]  # This is a [value, momentum, velocity] list
-                
-                # Get gradient value
-                grad_value = grad[0] if isinstance(grad, list) else grad
-                
-                if optimizer == "adam":
-                    # Adam update
-                    param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
-                    param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+            # Find the index in vocabulary
+            vocab_idx = None
+            for i, vocab_token in enumerate(self.vocab):
+                if vocab_token[1] == token_id:
+                    vocab_idx = i
+                    break
+            
+            if vocab_idx is not None:
+                vocab_indices[vocab_idx] = True  # Mark this index as updated
+                for pos in range(self.embeddingSize):
+                    grad = embedding_gradients[token_idx][pos]
+                    param = self.transformer["embeddings"][vocab_idx][pos]
                     
-                    # Compute bias-corrected estimates
-                    m_hat = param[1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
-                    v_hat = param[2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                    # Get gradient value
+                    grad_value = grad if isinstance(grad, (int, float)) else grad[0] if isinstance(grad, list) else 0
                     
-                    # Update parameter value (at index 0)
-                    param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
-                else:
-                    # SGD update
-                    param[0] -= lr * grad_value
+                    # Add weight decay (L2 regularization)
+                    grad_value += weight_decay * param[0]
+                    
+                    if optimizer == "adam":
+                        # Adam update
+                        param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
+                        param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                        
+                        # Compute bias-corrected estimates
+                        m_hat = param[1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                        v_hat = param[2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                        
+                        # Update parameter value (at index 0)
+                        param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                    elif optimizer == "sgd_momentum":
+                        # SGD with momentum update
+                        param[1] = momentum_factor * param[1] + grad_value
+                        param[0] -= lr * param[1]
+                    else:
+                        # Plain SGD update
+                        param[0] -= lr * grad_value
 
         # Update layer parameters
         for layer_idx in range(self.layersAmount):
@@ -697,6 +782,10 @@ class Transformer:
                             # Get gradient value
                             grad_value = grad[0] if isinstance(grad, list) else grad
                             
+                            # Add weight decay (L2 regularization)
+                            if param_type == "weights":  # Only apply to weights, not biases
+                                grad_value += weight_decay * param[0]
+                            
                             if optimizer == "adam":
                                 # Adam update
                                 param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
@@ -708,6 +797,10 @@ class Transformer:
                                 
                                 # Update parameter
                                 param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                            elif optimizer == "sgd_momentum":
+                                # SGD with momentum update
+                                param[1] = momentum_factor * param[1] + grad_value
+                                param[0] -= lr * param[1]
                             else:
                                 # SGD update
                                 param[0] -= lr * grad_value
@@ -726,6 +819,10 @@ class Transformer:
                                                 # Get the gradient
                                                 grad_value = head_grads[i][0] if isinstance(head_grads[i], list) else head_grads[i]
                                                 
+                                                # Add weight decay (L2 regularization)
+                                                if param_type == "weights":  # Only apply to weights, not biases
+                                                    grad_value += weight_decay * head_params[i][0]
+                                                
                                                 if optimizer == "adam":
                                                     # Adam update
                                                     head_params[i][1] = self.adam_params['beta1'] * head_params[i][1] + (1 - self.adam_params['beta1']) * grad_value
@@ -737,6 +834,10 @@ class Transformer:
                                                     
                                                     # Update parameter
                                                     head_params[i][0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                                                elif optimizer == "sgd_momentum":
+                                                    # SGD with momentum update
+                                                    head_params[i][1] = momentum_factor * head_params[i][1] + grad_value
+                                                    head_params[i][0] -= lr * head_params[i][1]
                                                 else:
                                                     # SGD update
                                                     head_params[i][0] -= lr * grad_value
@@ -751,6 +852,10 @@ class Transformer:
                                             # Get the gradient
                                             grad_value = nested_grads[i][0] if isinstance(nested_grads[i], list) else nested_grads[i]
                                             
+                                            # Add weight decay (L2 regularization)
+                                            if param_type == "weights":  # Only apply to weights, not biases
+                                                grad_value += weight_decay * nested_params[i][0]
+                                            
                                             if optimizer == "adam":
                                                 # Adam update
                                                 nested_params[i][1] = self.adam_params['beta1'] * nested_params[i][1] + (1 - self.adam_params['beta1']) * grad_value
@@ -762,6 +867,10 @@ class Transformer:
                                                 
                                                 # Update parameter
                                                 nested_params[i][0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                                            elif optimizer == "sgd_momentum":
+                                                # SGD with momentum update
+                                                nested_params[i][1] = momentum_factor * nested_params[i][1] + grad_value
+                                                nested_params[i][0] -= lr * nested_params[i][1]
                                             else:
                                                 # SGD update
                                                 nested_params[i][0] -= lr * grad_value
@@ -771,6 +880,8 @@ class Transformer:
         if optimizer == "adam":
             print(f"Sample Adam values: momentum={param_to_check[1]}, velocity={param_to_check[2]}")
             self.check_adam_state()
+        elif optimizer == "sgd_momentum":
+            print(f"Sample momentum value: {param_to_check[1]}")
         else:
             print("Using SGD - no momentum/velocity values to report")
         print("Training step completed in", timer_end(gtimer), "ms")
@@ -796,20 +907,28 @@ class Transformer:
         
         Args:
             epochs: Number of epochs to train for
-            optimizer: Which optimizer to use - "sgd" or "adam"
+            optimizer: Which optimizer to use - "sgd", "sgd_momentum", or "adam"
         """
         import threading
         import time
         
-        if optimizer not in ["sgd", "adam"]:
+        if optimizer not in ["sgd", "sgd_momentum", "adam"]:
             print(f"Unknown optimizer: {optimizer}, falling back to SGD")
             optimizer = "sgd"
         
         print(f"\n{'='*40}\nStarting training with {optimizer} optimizer\n{'='*40}\n")
         
+        # Initialize loss tracking
         best_loss = float('inf')
         epoch_losses = []
         continue_training = True
+        self.loss_history = []
+        loss_window_size = 10
+        
+        # For detecting plateaus
+        plateau_patience = 5
+        plateau_counter = 0
+        last_best_loss = float('inf')
         
         # Define sweet spot range
         sweet_spot_min = 2.0
@@ -844,7 +963,7 @@ class Transformer:
                 for j in range(len(tokens) - 1):
                     input_tokens = tokens[:j+1]
                     target_token = tokens[j+1]
-                    loss = self.train_step(input_tokens, target_token, optimizer)
+                    loss = self.train_step(input_tokens, target_token, optimizer, training_mode=True)
                     
                     dataset_total_loss += loss
                     sequence_positions += 1
@@ -860,7 +979,22 @@ class Transformer:
             # Calculate epoch average loss
             avg_epoch_loss = sum(batch_losses) / len(batch_losses)
             epoch_losses.append(avg_epoch_loss)
+            self.loss_history.append(avg_epoch_loss)
             print(f"Epoch {epoch + 1} average loss: {avg_epoch_loss:.6f}")
+            
+            # Check for plateaus
+            if len(self.loss_history) >= loss_window_size:
+                avg_recent_loss = sum(self.loss_history[-loss_window_size:]) / loss_window_size
+                print(f"Average loss over last {loss_window_size} epochs: {avg_recent_loss:.6f}")
+                
+                # Check for plateaus
+                if best_loss == last_best_loss:
+                    plateau_counter += 1
+                    if plateau_counter >= plateau_patience:
+                        print(f"Warning: Training appears to be plateauing for {plateau_counter} epochs")
+                else:
+                    plateau_counter = 0
+                    last_best_loss = best_loss
             
             # Check if new best loss - if so, we'll prompt for testing
             is_best_loss = avg_epoch_loss < best_loss
@@ -915,13 +1049,24 @@ class Transformer:
                     # Construct appropriate prompt based on whether it's best loss or regular epoch end
                     prompt_text = "Enter test input" if is_best_loss else f"Epoch {epoch+1} complete. Enter test input"
                     
+                    # Get available optimizer alternatives
+                    optimizer_options = []
+                    if optimizer != "sgd":
+                        optimizer_options.append("sgd")
+                    if optimizer != "sgd_momentum":
+                        optimizer_options.append("sgd_momentum")
+                    if optimizer != "adam":
+                        optimizer_options.append("adam")
+                    
+                    optimizer_switch_options = " or ".join([f"/switch_to_{opt}" for opt in optimizer_options])
+                    
                     # Use a thread-based approach for input with timeout
                     user_input = [None]
                     input_received = [False]
                     
                     def input_thread_func():
                         try:
-                            user_input[0] = input(f"{prompt_text} within 30 seconds (or /stop_training, /continue, /save, or /switch_to_{optimizer if optimizer == 'adam' else 'sgd'}): ")
+                            user_input[0] = input(f"{prompt_text} within 30 seconds (or /stop_training, /continue, /save, or {optimizer_switch_options}): ")
                             input_received[0] = True
                         except:
                             pass
@@ -938,10 +1083,11 @@ class Transformer:
                         time.sleep(0.1)
                     
                     if not input_received[0]:
-                        # Timeout occurred
+                        # Properly handle timeout - explicitly break out of this testing loop
                         print("\nTimeout reached. Automatically continuing training...")
                         continue_testing = False
-                        continue
+                        # Don't need to continue past this point if timed out
+                        break
                     
                     # Process user input
                     test_input = user_input[0]
@@ -953,14 +1099,11 @@ class Transformer:
                     elif test_input == "/continue":
                         continue_testing = False
                         print("Continuing training...")
-                    elif test_input == "/switch_to_adam" and optimizer == "sgd":
+                    elif test_input.startswith("/switch_to_") and test_input[11:] in ["sgd", "sgd_momentum", "adam"]:
+                        new_optimizer = test_input[11:]
                         continue_testing = False
-                        optimizer = "adam"
-                        print("Switching to Adam optimizer for next epochs")
-                    elif test_input == "/switch_to_sgd" and optimizer == "adam":
-                        continue_testing = False
-                        optimizer = "sgd"
-                        print("Switching to SGD optimizer for next epochs")
+                        optimizer = new_optimizer
+                        print(f"Switching to {new_optimizer.upper()} optimizer for next epochs")
                     elif test_input == "/save":
                         # New thread for save path input
                         save_input = [None]
@@ -1001,13 +1144,13 @@ class Transformer:
                             print(f"Generated output: {output}")
                         except Exception as e:
                             print(f"Error generating output: {e}")
-            
+                
             print("Epoch", epoch + 1, "completed in", timer_end(timer), "ms")
         
         print(f"\n{'='*40}\nTraining completed after {len(epoch_losses)} epochs\nFinal loss: {epoch_losses[-1]:.6f}\nBest loss: {best_loss:.6f}\n{'='*40}\n")
         return best_loss
     
-    def inference(self, context, return_cache):
+    def inference(self, context, return_cache, training_mode=False):
         tokenized_input = self.tokenize(context)
         input_length = len(tokenized_input)
         if input_length > self.contextSize:
@@ -1186,6 +1329,17 @@ class Transformer:
             if return_cache:
                 cache["layers"][layer]["combined"] = combined_vectors.copy()
 
+            # Apply dropout to attention output if in training mode
+            if training_mode:
+                dropout_rate = 0.1  # 10% dropout
+                for i in range(len(combined_vectors)):
+                    for j in range(len(combined_vectors[i])):
+                        if random([0, 1]) < dropout_rate:
+                            combined_vectors[i][j] = 0
+                        else:
+                            # Scale to maintain expected value
+                            combined_vectors[i][j] /= (1 - dropout_rate)
+
             # Residual connection - add original vectors to output vectors
             for i in range(len(combined_vectors)):
                 for j in range(self.embeddingSize):
@@ -1227,6 +1381,17 @@ class Transformer:
                         
             if return_cache:
                 cache["layers"][layer]["feed_forward"]["after_relu"] = bigger_vectors.copy()
+
+            # Apply dropout to feed forward if in training mode
+            if training_mode:
+                dropout_rate = 0.1  # 10% dropout
+                for i in range(len(bigger_vectors)):
+                    for j in range(len(bigger_vectors[i])):
+                        if random([0, 1]) < dropout_rate:
+                            bigger_vectors[i][j] = 0
+                        else:
+                            # Scale to maintain expected value
+                            bigger_vectors[i][j] /= (1 - dropout_rate)
 
             # Shrink vectors back to original size
             final_vectors = []
@@ -1327,25 +1492,23 @@ except Exception:
 transformer = Transformer(True, {
     "contextSize": 64,              
     "embeddingSize": 32,            
-    "learningRate": 0.05,           # Increased from 0.003 for SGD
+    "learningRate": 0.05,           
     "maxOutputSize": 16,            
     "layersAmount": 2,              
     "heads": 2,                     
-    "weightsinitrange": [-0.1, 0.1],  # Slightly wider for better exploration with SGD
-    "biasesinitrange": [-0.01, 0.01], # Slightly wider for better exploration with SGD
+    "use_he_init": True,            # Add this to use He initialization
+    "biasesinitrange": [-0.01, 0.01],
     "embeddinginitrange": [-0.1, 0.1],
     "dataset": dataset
 })
 
-# Explicitly set optimizer to SGD (though it's the default)
-print(f"Starting training with learning rate: {transformer.learningRate}")
-transformer.train(1000)  # Training for longer with more flexibility to stop
+# Start training with SGD + Momentum
+transformer.train(1000, optimizer="sgd_momentum")
 
 # Interactive console
 try:
     print("\nEntering interactive mode. Type a message or command:")
-    print("Commands: /save [path], /check_adam, /switch_to_adam, /switch_to_sgd")
-    current_optimizer = "sgd"  # Track current optimizer for switch commands
+    print("Commands: /save [path]")
     
     while True:
         text = input("> ")
@@ -1356,20 +1519,6 @@ try:
         elif text == "/save":
             transformer.save()
             print("Model saved to model.json")
-            continue
-        elif text == "/check_adam":
-            if current_optimizer == "adam":
-                transformer.check_adam_state()
-            else:
-                print("Not using Adam optimizer currently")
-            continue
-        elif text == "/switch_to_adam" and current_optimizer == "sgd":
-            current_optimizer = "adam"
-            print("Switched to Adam optimizer for console testing")
-            continue
-        elif text == "/switch_to_sgd" and current_optimizer == "adam":
-            current_optimizer = "sgd"
-            print("Switched to SGD optimizer for console testing")
             continue
         
         print("Input tokens:", [token[0] for token in transformer.tokenize(text)])
