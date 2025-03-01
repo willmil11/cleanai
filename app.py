@@ -268,19 +268,18 @@ class Transformer:
         return result
 
     def calculate_positional_encoding(self, sequence_length):
-        timer = timer_()
-        print("Calculating positional encodings...")
-        
         positional_encodings = []
         for pos in range(sequence_length):
             embedding = []
             for i in range(self.embeddingSize):
-                denominator = pow(10000, (2 * i)/self.embeddingSize)
+                # Use i//2 to pair dimensions
+                denominator = 10000 ** (2 * (i // 2) / self.embeddingSize)
                 if i % 2 == 0:
-                    embedding.append(float(math.sin(pos/denominator)))
+                    embedding.append(math.sin(pos / denominator))
                 else:
-                    embedding.append(float(math.cos(pos/denominator)))
+                    embedding.append(math.cos(pos / denominator))
             positional_encodings.append(embedding)
+        return positional_encodings
         
         print("Calculated positional encodings in", timer_end(timer), "ms")
         return positional_encodings
@@ -364,10 +363,9 @@ class Transformer:
         # Calculate exp of shifted scores
         exp_scores = [math.exp(score - max_score) for score in float_scores]
         
-        # Calculate sum of exps
         sum_exp = sum(exp_scores)
-        
-        # Return normalized probabilities
+        if sum_exp == 0:
+            return [1.0 / len(float_scores) for _ in float_scores]
         return [exp / sum_exp for exp in exp_scores]
 
     def save(self, path="model.json"):
@@ -1340,11 +1338,6 @@ class Transformer:
                             # Scale to maintain expected value
                             combined_vectors[i][j] /= (1 - dropout_rate)
 
-            # Residual connection - add original vectors to output vectors
-            for i in range(len(combined_vectors)):
-                for j in range(self.embeddingSize):
-                    combined_vectors[i][j] += final_embeddings[i][j]
-
             # Normalize and apply normalize_2 weights/biases
             normalized_vectors = []
             for i in range(len(combined_vectors)):
@@ -1358,6 +1351,11 @@ class Transformer:
                 
             if return_cache:
                 cache["layers"][layer]["normalized"] = normalized_vectors.copy()
+
+            # Residual connection - add original vectors to output vectors
+            for i in range(len(combined_vectors)):
+                for j in range(self.embeddingSize):
+                    combined_vectors[i][j] += final_embeddings[i][j]
 
             # Feed-forward part - first make vectors bigger
             bigger_vectors = []
