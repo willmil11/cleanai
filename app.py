@@ -330,15 +330,37 @@ class Transformer:
         # Calculate mean using pure Python
         mean = sum(vector_list) / len(vector_list)
         
-        # Calculate variance and standard deviation
-        variance = sum((x - mean) ** 2 for x in vector_list) / len(vector_list)
-        std = variance ** 0.5
+        # Calculate variance and standard deviation with numerical safeguards
+        squared_diffs = []
+        for x in vector_list:
+            # Clip differences to prevent extreme values
+            diff = x - mean
+            if diff > 1e6:  # Clip extremely large differences
+                diff = 1e6
+            elif diff < -1e6:
+                diff = -1e6
+            squared_diffs.append(diff * diff)
+        
+        variance = sum(squared_diffs) / len(vector_list)
+        
+        # Ensure std is not too small to prevent division issues
+        std = math.sqrt(variance + 1e-10)  # Add epsilon to prevent sqrt of very small number
         
         if std < 1e-6:  # If std is very small
             return [0.0 for _ in range(len(vector_list))]  # Return zero vector
         
-        # Return normalized values
-        return [(x - mean) / std for x in vector_list]
+        # Return normalized values with clipping for safety
+        normalized = []
+        for x in vector_list:
+            norm_val = (x - mean) / std
+            # Clip normalized values to reasonable range
+            if norm_val > 10.0:
+                norm_val = 10.0
+            elif norm_val < -10.0:
+                norm_val = -10.0
+            normalized.append(norm_val)
+        
+        return normalized
 
     def dot_product(self, vec1, vec2):
         # Manual implementation of dot product
@@ -397,7 +419,7 @@ class Transformer:
         predicted_probs = self.softmax(predicted_scores)
         
         # Create smoothed target distribution
-        epsilon = 0.1
+        epsilon = 0 #Changed from 0.1 to 0 for better overfitting
         vocab_size = len(self.vocab)
         target_distribution = [(epsilon / (vocab_size - 1)) for _ in range(vocab_size)]
         
@@ -510,7 +532,7 @@ class Transformer:
         warmup_steps = 100  # Reduced from 200
         decay_factor = 0.25  # From 0.5 to 0.25 for slower decay
         base_lr = self.learningRate
-        min_lr = 0.001  # Add minimum learning rate
+        min_lr = 0.0005  # Add minimum learning rate
 
         if self.step_num < warmup_steps:
             lr = base_lr * (self.step_num / warmup_steps)
@@ -521,7 +543,7 @@ class Transformer:
         cycle_length = 50  # Steps per cycle
         cycle_position = self.step_num % cycle_length
         cycle_ratio = cycle_position / cycle_length
-        cycle_factor = 1.0 + math.sin(cycle_ratio * math.pi) * 0.5
+        cycle_factor = 1.0  # Set to constant 1.0 instead of using sine wave
         lr = lr * cycle_factor
         
         # Apply minimum learning rate
@@ -534,7 +556,7 @@ class Transformer:
         
         # Get predicted probabilities and compute error gradients
         predicted_probs = self.softmax(cache["vocab_scores"])
-        epsilon = 0.05  # Reduced from 0.1 for better gradient signals
+        epsilon = 0 #Changed from 0.05 to 0 for better overfitting
         vocab_size = len(self.vocab)
         target_distribution = [(epsilon / (vocab_size - 1)) for _ in range(vocab_size)]
         
@@ -672,14 +694,22 @@ class Transformer:
         print("Applying gradient clipping and scaling...")
         timer = timer_()
         
-        # Adaptive clipping thresholds based on training progress
-        max_grad_norm = 5.0
+        # A more balanced gradient clipping approach
+        max_grad_norm = 5.0  # Start with a moderately high threshold
+        if self.step_num > 500:
+            max_grad_norm = 4.0  # Reduce somewhat as training progresses
         if self.step_num > 1000:
-            max_grad_norm = 3.0
+            max_grad_norm = 3.0  # Further reduce but not too aggressively
         
         # Compute global norm using our helper function
         global_grad_norm = compute_global_norm(embedding_gradients, layer_gradients)
         print(f"Global gradient norm: {global_grad_norm:.6f}")
+
+        # Add inside train_step after computing the global gradient norm
+        if math.isnan(global_grad_norm) or math.isinf(global_grad_norm):
+            # Severe issue detected - use very restrictive clipping just for this step
+            max_grad_norm = 0.1
+            print("WARNING: NaN or Inf gradients detected, using emergency clipping")
         
         # Apply clipping if needed
         if global_grad_norm > max_grad_norm:
@@ -716,7 +746,7 @@ class Transformer:
         print(f"Using {optimizer} optimizer...")
         
         # Weight decay parameter
-        weight_decay = 1e-5  # L2 regularization factor
+        weight_decay = 0  # L2 regularization factor, changed from 1e-5 to 0 for faster overfitting
 
         # For SGD with momentum
         momentum_factor = 0.5  # Classic momentum value
@@ -1329,7 +1359,7 @@ class Transformer:
 
             # Apply dropout to attention output if in training mode
             if training_mode:
-                dropout_rate = 0.1  # 10% dropout
+                dropout_rate = 0  # 10% dropout, changed to 0 because we wanna overfit
                 for i in range(len(combined_vectors)):
                     for j in range(len(combined_vectors[i])):
                         if random([0, 1]) < dropout_rate:
@@ -1382,7 +1412,7 @@ class Transformer:
 
             # Apply dropout to feed forward if in training mode
             if training_mode:
-                dropout_rate = 0.1  # 10% dropout
+                dropout_rate = 0  # 10% dropout, switched to 0 for faster overfitting.
                 for i in range(len(bigger_vectors)):
                     for j in range(len(bigger_vectors[i])):
                         if random([0, 1]) < dropout_rate:
@@ -1501,7 +1531,7 @@ transformer = Transformer(True, {
 })
 
 # Start training with SGD + Momentum
-transformer.train(1000, optimizer="sgd_momentum")
+transformer.train(1000, optimizer="sgd")
 
 # Interactive console
 try:
