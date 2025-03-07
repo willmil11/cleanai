@@ -690,54 +690,46 @@ class Transformer:
 
         print("Computed gradients in", timer_end(gtimer2), "ms")
 
-        # Better gradient clipping
-        print("Applying gradient clipping and scaling...")
+        print("Applying continuous gradient scaling...")
         timer = timer_()
-        
-        # A more balanced gradient clipping approach
-        max_grad_norm = 5.0  # Start with a moderately high threshold
-        if self.step_num > 500:
-            max_grad_norm = 4.0  # Reduce somewhat as training progresses
-        if self.step_num > 1000:
-            max_grad_norm = 3.0  # Further reduce but not too aggressively
-        
-        # Compute global norm using our helper function
+
+        # Define a hyperparameter to control scaling aggressiveness
+        gamma = 5.0  # You can adjust gamma based on training dynamics
+
+        # Compute the global gradient norm using your helper function
         global_grad_norm = compute_global_norm(embedding_gradients, layer_gradients)
         print(f"Global gradient norm: {global_grad_norm:.6f}")
 
-        # Add inside train_step after computing the global gradient norm
-        if math.isnan(global_grad_norm) or math.isinf(global_grad_norm):
-            # Severe issue detected - use very restrictive clipping just for this step
-            max_grad_norm = 0.1
-            print("WARNING: NaN or Inf gradients detected, using emergency clipping")
-        
-        # Apply clipping if needed
-        if global_grad_norm > max_grad_norm:
-            scaling_factor = max_grad_norm / global_grad_norm
-            print(f"Clipping gradients with factor {scaling_factor:.6f}")
-            
-            # Scale embedding gradients
-            for i in range(len(embedding_gradients)):
-                for j in range(len(embedding_gradients[i])):
-                    embedding_gradients[i][j] *= scaling_factor
-            
-            # Scale layer gradients - recursive function
-            def scale_gradients(grad_struct, factor):
-                if isinstance(grad_struct, list):
-                    # If it's a list with a gradient value
-                    if len(grad_struct) > 0 and isinstance(grad_struct[0], (int, float)):
-                        grad_struct[0] *= factor
-                    return
-                elif isinstance(grad_struct, dict):
-                    # Recursively process dictionary
-                    for key, value in grad_struct.items():
-                        scale_gradients(value, factor)
-            
-            # Apply scaling to all layer gradients
-            for layer_idx in range(len(layer_gradients)):
-                scale_gradients(layer_gradients[layer_idx], scaling_factor)
-        
-        print("Applied gradient clipping in", timer_end(timer), "ms")
+        # Compute a continuous scaling factor:
+        # When global_grad_norm is small, tanh(x)/x is near 1.
+        if global_grad_norm == 0:
+            scaling_factor = 1.0
+        else:
+            scaling_factor = math.tanh(global_grad_norm / gamma) / (global_grad_norm / gamma)
+
+        print(f"Scaling gradients with factor {scaling_factor:.6f}")
+
+        # Scale embedding gradients uniformly
+        for i in range(len(embedding_gradients)):
+            for j in range(len(embedding_gradients[i])):
+                embedding_gradients[i][j] *= scaling_factor
+
+        # Recursive function to scale nested layer gradients
+        def scale_gradients(grad_struct, factor):
+            if isinstance(grad_struct, list):
+                if len(grad_struct) > 0 and isinstance(grad_struct[0], (int, float)):
+                    grad_struct[0] *= factor
+                return
+            elif isinstance(grad_struct, dict):
+                for key, value in grad_struct.items():
+                    scale_gradients(value, factor)
+
+        # Scale all layer gradients uniformly
+        for layer_idx in range(len(layer_gradients)):
+            scale_gradients(layer_gradients[layer_idx], scaling_factor)
+
+        print("Applied continuous gradient scaling in", timer_end(timer), "ms")
+
         
         print("Updating parameters...")
         timer = timer_()
@@ -1168,7 +1160,14 @@ class Transformer:
                             print(f"Error saving model: {e}")
                     else:
                         try:
-                            output = self.generate(test_input)
+                            def generate_response(text, temp=1e-10):
+                                # In your interactive loop:
+                                formatted_input = f"user:\n{text}\nyou:\n"
+                                print(f"Debug - Formatted input: '{formatted_input}'")
+                                tokenized = self.tokenize(formatted_input)
+                                print(f"Debug - Tokenized input: {tokenized}")
+                                output = self.generate(formatted_input, temperature=1e-10)
+                            output = generate_response(test_input)
                             print(f"Generated output: {output}")
                         except Exception as e:
                             print(f"Error generating output: {e}")
@@ -1179,6 +1178,31 @@ class Transformer:
         return best_loss
     
     def inference(self, context, return_cache, training_mode=False):
+        def scale_activation(vector, base_gamma=5.0):
+            """Dramatically more aggressive scaling for extreme values"""
+            norm = math.sqrt(sum(x * x for x in vector))
+            print(f"Activation norm: {norm}")
+            
+            if norm < 1e-10:  # Avoid division by zero
+                return vector
+            
+            # Super aggressive adaptive gamma
+            if norm > 1000:
+                # For large norms, use much stronger scaling
+                # This gives a factor of 1/norm which normalizes the vector to roughly unit length
+                target_norm = 5.0  # Target reasonable norm
+                scaling_factor = target_norm / norm
+                print(f"Extreme scaling: norm={norm:.2e}, factor={scaling_factor:.2e}")
+                return [x * scaling_factor for x in vector]
+            elif norm > 100:
+                # Moderately aggressive for somewhat large norms
+                scaling_factor = math.tanh(1.0) / norm * 100
+                return [x * scaling_factor for x in vector]
+            else:
+                # Standard tanh-based scaling for normal ranges
+                scaling_factor = math.tanh(norm / base_gamma) / (norm / base_gamma)
+                return [x * scaling_factor for x in vector]
+
         tokenized_input = self.tokenize(context)
         input_length = len(tokenized_input)
         if input_length > self.contextSize:
@@ -1387,15 +1411,18 @@ class Transformer:
                 for j in range(self.embeddingSize):
                     combined_vectors[i][j] += final_embeddings[i][j]
 
+            for i in range(len(combined_vectors)): #Added scaling because numbers would explode into NaNs
+                combined_vectors[i] = scale_activation(combined_vectors[i], base_gamma=5.0)
+
             # Feed-forward part - first make vectors bigger
             bigger_vectors = []
             for vector in normalized_vectors:
                 bigger_vector = []
                 for pos in range(self.embeddingSize * 4):  # 4 times bigger
-                    sum = 0
+                    accum = 0
                     for j in range(self.embeddingSize):
-                        sum += vector[j] * self.transformer["layers"][layer]["weights"]["feed_forward"]["grow"][pos * self.embeddingSize + j][0]
-                    bigger_vector.append(sum + self.transformer["layers"][layer]["biases"]["feed_forward"]["grow"][pos][0])
+                        accum += vector[j] * self.transformer["layers"][layer]["weights"]["feed_forward"]["grow"][pos * self.embeddingSize + j][0]
+                    bigger_vector.append(accum + self.transformer["layers"][layer]["biases"]["feed_forward"]["grow"][pos][0])
                 bigger_vectors.append(bigger_vector)
 
             if return_cache:
@@ -1426,16 +1453,19 @@ class Transformer:
             for vector in bigger_vectors:
                 final_vector = []
                 for pos in range(self.embeddingSize):
-                    sum = 0
+                    accum = 0  # Renamed from 'sum' to 'accum'
                     for j in range(self.embeddingSize * 4):
-                        sum += vector[j] * self.transformer["layers"][layer]["weights"]["feed_forward"]["shrink"][pos * (self.embeddingSize * 4) + j][0]
-                    final_vector.append(sum + self.transformer["layers"][layer]["biases"]["feed_forward"]["shrink"][pos][0])
+                        accum += vector[j] * self.transformer["layers"][layer]["weights"]["feed_forward"]["shrink"][pos * (self.embeddingSize * 4) + j][0]
+                    final_vector.append(accum + self.transformer["layers"][layer]["biases"]["feed_forward"]["shrink"][pos][0])
                 final_vectors.append(final_vector)
-            
+
             # Add residual connection
             for i in range(len(final_vectors)):
                 for j in range(self.embeddingSize):
                     final_vectors[i][j] += normalized_vectors[i][j]
+
+            for i in range(len(final_vectors)): #last scaling
+                final_vectors[i] = scale_activation(final_vectors[i], base_gamma=5.0)
                     
             if return_cache:
                 cache["layers"][layer]["feed_forward"]["final"] = final_vectors.copy()
@@ -1481,34 +1511,69 @@ class Transformer:
         current_context = context
         output = ""
         
-        for _ in range(self.maxOutputSize):
-            next_token, cache = self.inference(current_context, True)  # Get cache to access logits
+        print(f"Debug - Starting generation with context: '{context}'")
+        print(f"Debug - Using temperature: {temperature}")
+        
+        for step in range(self.maxOutputSize):
+            next_token, cache = self.inference(current_context, True)
+            print(f"Debug - Step {step}, inference returned token: {next_token}")
             
-            # Apply temperature to the vocab scores
+            # Get vocab scores
             scores = cache["vocab_scores"]
-            scaled_scores = [score / temperature for score in scores]
-            probs = self.softmax(scaled_scores)
             
-            # Sample based on probabilities instead of taking argmax
-            random_value = random([0, 1])  # FIX: Provide range parameter [0, 1]
-            cumulative_prob = 0.0
-            next_token_idx = 0
-            
-            for i, prob in enumerate(probs):
-                cumulative_prob += prob
-                if random_value <= cumulative_prob:
-                    next_token_idx = i
-                    break
-            
-            next_token = [self.vocab[next_token_idx][0], self.vocab[next_token_idx][1]]
+            # For near-zero temperature, directly pick highest probability token
+            if temperature < 0.0001:
+                highest_score = float('-inf')
+                next_token_idx = 0
+                
+                # Print top 5 scores for debugging
+                top_scores = [(i, scores[i]) for i in range(len(scores))]
+                top_scores.sort(key=lambda x: x[1], reverse=True)
+                print(f"Debug - Top 5 token scores:")
+                for i in range(min(5, len(top_scores))):
+                    idx, score = top_scores[i]
+                    token_info = self.vocab[idx]
+                    print(f"  {i+1}. Token '{token_info[0]}' (ID: {token_info[1]}): {score}")
+                
+                # Find highest scoring token
+                for i, score in enumerate(scores):
+                    if score > highest_score:
+                        highest_score = score
+                        next_token_idx = i
+                
+                next_token = [self.vocab[next_token_idx][0], self.vocab[next_token_idx][1]]
+                print(f"Debug - Selected highest probability token: {next_token}")
+            else:
+                # Normal temperature-based sampling
+                scaled_scores = [score / temperature for score in scores]
+                probs = self.softmax(scaled_scores)
+                
+                random_value = random([0, 1])
+                print(f"Debug - Random value for sampling: {random_value}")
+                
+                cumulative_prob = 0.0
+                next_token_idx = 0
+                
+                for i, prob in enumerate(probs):
+                    cumulative_prob += prob
+                    if random_value <= cumulative_prob:
+                        next_token_idx = i
+                        break
+                
+                next_token = [self.vocab[next_token_idx][0], self.vocab[next_token_idx][1]]
+                print(f"Debug - Selected token through sampling: {next_token}")
             
             # Check for end token (100257)
             if next_token[1] == 100257:
+                print("Debug - End token detected, breaking generation loop")
                 break
-                    
+            
+            # Add token to output
             output += next_token[0]
             current_context += next_token[0]
+            print(f"Debug - Current output: '{output}'")
         
+        print(f"Debug - Final generated output: '{output}'")
         return output
 
 try:
@@ -1517,26 +1582,41 @@ except Exception:
     print("Failed to read dataset, exiting...")
     exit(1)
 
-transformer = Transformer(True, {
-    "contextSize": 64,              
-    "embeddingSize": 32,            
-    "learningRate": 0.05,           
-    "maxOutputSize": 16,            
-    "layersAmount": 2,              
-    "heads": 2,                     
-    "use_he_init": True,            # Add this to use He initialization
-    "biasesinitrange": [-0.01, 0.01],
-    "embeddinginitrange": [-0.1, 0.1],
-    "dataset": dataset
-})
+flag = True
 
-# Start training with SGD + Momentum
-transformer.train(1000, optimizer="sgd")
+if flag:
+    transformer = Transformer(True, {
+        "contextSize": 64,              
+        "embeddingSize": 32,            
+        "learningRate": 0.05,           
+        "maxOutputSize": 16,            
+        "layersAmount": 2,              
+        "heads": 2,                     
+        "use_he_init": True,            # Add this to use He initialization
+        "biasesinitrange": [-0.01, 0.01],
+        "embeddinginitrange": [-0.1, 0.1],
+        "dataset": dataset
+    })
 
-# Interactive console
+    # Start training with SGD + Momentum
+    transformer.train(1000, optimizer="sgd")
+
+else:
+    transformer = Transformer(new=False, path="model_sgd.json", parameters={
+        "dataset": dataset
+    })
+
 try:
     print("\nEntering interactive mode. Type a message or command:")
     print("Commands: /save [path]")
+    
+    def generate_response(text, temp=1e-10):
+        # In your interactive loop:
+        formatted_input = f"user:\n{text}\nyou:\n"
+        print(f"Debug - Formatted input: '{formatted_input}'")
+        tokenized = transformer.tokenize(formatted_input)
+        print(f"Debug - Tokenized input: {tokenized}")
+        output = transformer.generate(formatted_input, temperature=1e-10)
     
     while True:
         text = input("> ")
@@ -1549,8 +1629,8 @@ try:
             print("Model saved to model.json")
             continue
         
-        print("Input tokens:", [token[0] for token in transformer.tokenize(text)])
-        output = transformer.generate(text)
+        print("Input tokens:", [token[0] for token in transformer.tokenize(f"user:\n{text}\nyou:\n")])
+        output = generate_response(text)
         print("Generated output:", output)
 except KeyboardInterrupt:
     exit(0)
