@@ -1063,13 +1063,17 @@ class Transformer:
             
             # Update best loss if needed
             if is_best_loss:
-                best_loss = avg_epoch_loss
+                # If best_loss isn't infinity, report the previous best loss
+                if best_loss != float('inf'):
+                    print("\n" + "-"*60)
+                    print(f"NEW BEST LOSS ACHIEVED! Previous best loss was: {best_loss:.6f}")
+                    print("-"*60 + "\n")
+                else:
+                    print("\n" + "-"*60)
+                    print("NEW BEST LOSS ACHIEVED!")
+                    print("-"*60 + "\n")
                 
-                # Add a clear separator for visibility
-                print("\n" + "-"*60)
-                print("NEW BEST LOSS ACHIEVED!")
-                print("-"*60 + "\n")
-                
+                best_loss = avg_epoch_loss  # Update best_loss
                 print(f"New best loss: {best_loss:.6f}! Let's test the model:")
             
             # Allow testing after each epoch completion (if not already prompting for best loss)
