@@ -6,6 +6,8 @@ import math
 import uuid
 import json
 
+printdontprint = True
+
 timers = []
 def timer_():
     global timers
@@ -965,18 +967,22 @@ class Transformer:
             print(f"Epoch {epoch + 1}/{epochs}")
             print("-"*60 + "\n")
                 
+            # Calculate total IO pairs in the dataset
+            total_io_pairs = sum(len(tokens) - 1 for tokens in self.tokenized_dataset)
+            processed_io_pairs = 0
+
             timer = timer_()
             print("Starting epoch", epoch + 1)
-            
+
             # Track losses for this epoch
             batch_losses = []
-            
+
             for i in range(len(self.tokenized_dataset)):
                 stimer = timer_()
                 print("Training on item", i + 1, "/", len(self.tokenized_dataset))
                 tokens = self.tokenized_dataset[i]
                 
-                # Track dataset loss
+                # Track dataset loss for the current item
                 dataset_total_loss = 0.0
                 sequence_positions = 0
                 
@@ -988,19 +994,22 @@ class Transformer:
                     dataset_total_loss += loss
                     sequence_positions += 1
                     
-                    print(f"Loss: {loss:.4f} (sequence position {j+1}/{len(tokens)-1})")
+                    processed_io_pairs += 1
+                    
+                    # Compute progress for the current IO pair within the current item
+                    current_item_progress = ((j+1) / (len(tokens) - 1)) * 100
+                    # Compute overall progress across all IO pairs in the dataset
+                    overall_progress = (processed_io_pairs / total_io_pairs) * 100
+                    
+                    print(f"Loss: {loss:.4f} (IO pair {j+1}/{len(tokens)-1}) | " +
+                        f"Current IO pair progress: {current_item_progress:.2f}% | " +
+                        f"Overall IO pairs progress: {overall_progress:.2f}%", flush=True)
                 
                 # Calculate average loss for this dataset item
                 avg_item_loss = dataset_total_loss / sequence_positions
                 batch_losses.append(avg_item_loss)
                 print(f"Average loss for item {i+1}: {avg_item_loss:.4f}")
                 print("Trained on item", i + 1, "in", timer_end(stimer), "ms")
-                # Compute progress for the current item (in percentage)
-                current_item_progress = ((j+1) / (len(tokens) - 1)) * 100
-                # Compute overall dataset progress (in percentage)
-                overall_progress = ((i+1) / len(self.tokenized_dataset)) * 100
-
-                print(f"Progress: Current IO pair: {current_item_progress:.2f}% | Overall dataset: {overall_progress:.2f}%")
                 
             # Calculate epoch average loss
             avg_epoch_loss = sum(batch_losses) / len(batch_losses)
@@ -1185,10 +1194,13 @@ class Transformer:
     
     def inference(self, context, return_cache, training_mode=False):
         def scale_activation(vector, base_gamma=5.0):
+            global printdontprint
             """Dramatically more aggressive scaling for extreme values"""
             norm = math.sqrt(sum(x * x for x in vector))
-            print(f"Activation norm: {norm}")
-            
+            if printdontprint:
+                print(f"Activation norm: {norm}")
+            printdontprint = not printdontprint
+
             if norm < 1e-10:  # Avoid division by zero
                 return vector
             
