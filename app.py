@@ -1305,20 +1305,22 @@ class Transformer:
                     v_vectors.append(v_vector)
 
                 # Calculate dot products between each Q and K vector with causal masking
+                # Step 1: Calculate raw dot products and apply causal masking
                 attention_scores = []
                 for i, q_vector in enumerate(q_vectors):
                     token_scores = []
                     for j, k_vector in enumerate(k_vectors):
                         score = self.dot_product(q_vector, k_vector)
-                        # Scale by sqrt(embedding_size)
-                        score /= math.sqrt(self.embeddingSize)
-                        
-                        # Apply causal masking - prevent attending to future tokens
-                        if j > i:  # If this is a future token
-                            score = float('-inf')  # Set score to negative infinity
-                            
+                        if j > i:  # Apply causal masking: future tokens get -inf
+                            score = float('-inf')
                         token_scores.append(score)
                     attention_scores.append(token_scores)
+
+                # Step 2: Scale the non-masked scores by 1/sqrt(embeddingSize)
+                for i in range(len(attention_scores)):
+                    for j in range(len(attention_scores[i])):
+                        if attention_scores[i][j] != float('-inf'):
+                            attention_scores[i][j] /= math.sqrt(self.embeddingSize)
 
                 # Apply softmax to each token's attention scores
                 attention_probs = []
@@ -1588,7 +1590,7 @@ if flag:
     transformer = Transformer(True, {
         "contextSize": 64,              
         "embeddingSize": 32,            
-        "learningRate": 0.05,           
+        "learningRate": 0.001,           
         "maxOutputSize": 16,            
         "layersAmount": 2,              
         "heads": 2,                     
@@ -1600,7 +1602,6 @@ if flag:
 
     # Start training with SGD + Momentum
     transformer.train(1000, optimizer="sgd")
-
 else:
     transformer = Transformer(new=False, path="model_sgd.json", parameters={
         "dataset": dataset
