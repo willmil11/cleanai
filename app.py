@@ -995,6 +995,12 @@ class Transformer:
                 batch_losses.append(avg_item_loss)
                 print(f"Average loss for item {i+1}: {avg_item_loss:.4f}")
                 print("Trained on item", i + 1, "in", timer_end(stimer), "ms")
+                # Compute progress for the current item (in percentage)
+                current_item_progress = ((j+1) / (len(tokens) - 1)) * 100
+                # Compute overall dataset progress (in percentage)
+                overall_progress = ((i+1) / len(self.tokenized_dataset)) * 100
+
+                print(f"Progress: Current IO pair: {current_item_progress:.2f}% | Overall dataset: {overall_progress:.2f}%")
                 
             # Calculate epoch average loss
             avg_epoch_loss = sum(batch_losses) / len(batch_losses)
