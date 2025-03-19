@@ -1257,13 +1257,7 @@ class Transformer:
             for i in range(self.embeddingSize):
                 embedding[i] += (cache["positional_encodings"] if return_cache else positional_encodings)[pos][i]
                 
-            # Normalize and apply weights/biases
-            normalized = self.normalize_vector(embedding)
-            # Apply weights and biases directly here
-            for i in range(self.embeddingSize):
-                normalized[i] = normalized[i] * self.transformer["layers"][0]["weights"]["normalize_1"][i][0] + self.transformer["layers"][0]["biases"]["normalize_1"][i][0]
-                
-            final_embeddings.append(normalized)
+            final_embeddings.append(embedding)
 
         print("Computed embeddings in", timer_end(timer), "ms")
         gtimer = timer_()
@@ -1285,6 +1279,19 @@ class Transformer:
                     }
                 })
             
+            # CHANGE 1: Apply normalization BEFORE attention
+            normalized_embeddings = []
+            for i in range(len(final_embeddings)):
+                normalized = self.normalize_vector(final_embeddings[i])
+                weighted_normalized = []
+                for j in range(self.embeddingSize):
+                    weighted_value = normalized[j] * self.transformer["layers"][layer]["weights"]["normalize_1"][j][0] + self.transformer["layers"][layer]["biases"]["normalize_1"][j][0]
+                    weighted_normalized.append(weighted_value)
+                normalized_embeddings.append(weighted_normalized)
+            
+            if return_cache:
+                cache["layers"][layer]["normalized"] = normalized_embeddings.copy()
+            
             # Store outputs from each head
             head_outputs = []
             
@@ -1297,8 +1304,8 @@ class Transformer:
                 k_vectors = []
                 v_vectors = []
 
-                # For each token
-                for token_embedding in final_embeddings:
+                # For each token - CHANGED: use normalized_embeddings here
+                for token_embedding in normalized_embeddings:
                     # Calculate Q vector for this token
                     q_vector = []
                     for pos in range(self.embeddingSize):
@@ -1416,37 +1423,36 @@ class Transformer:
                             # Scale to maintain expected value
                             combined_vectors[i][j] /= (1 - dropout_rate)
 
-            # Normalize and apply normalize_2 weights/biases
+            # Add residual connection after attention
+            for i in range(len(combined_vectors)):
+                for j in range(self.embeddingSize):
+                    combined_vectors[i][j] += final_embeddings[i][j]
+
+            # REMOVED: Redundant normalization after residual connection
+            
+            # Optional safeguard scaling after combining
+            for i in range(len(combined_vectors)):
+                combined_vectors[i] = scale_activation(combined_vectors[i], base_gamma=5.0)
+
+            # CHANGE 2: Apply normalization BEFORE feed-forward
             normalized_vectors = []
             for i in range(len(combined_vectors)):
                 normalized = self.normalize_vector(combined_vectors[i])
-                # normalized is now guaranteed to be a list of Python floats
                 weighted_normalized = []
                 for j in range(self.embeddingSize):
                     weighted_value = normalized[j] * self.transformer["layers"][layer]["weights"]["normalize_2"][j][0] + self.transformer["layers"][layer]["biases"]["normalize_2"][j][0]
                     weighted_normalized.append(weighted_value)
                 normalized_vectors.append(weighted_normalized)
-                
-            if return_cache:
-                cache["layers"][layer]["normalized"] = normalized_vectors.copy()
 
-            # Residual connection - add original vectors to output vectors
-            for i in range(len(combined_vectors)):
-                for j in range(self.embeddingSize):
-                    combined_vectors[i][j] += final_embeddings[i][j]
-
-            for i in range(len(combined_vectors)): #Added scaling because numbers would explode into NaNs
-                combined_vectors[i] = scale_activation(combined_vectors[i], base_gamma=5.0)
-
-            # Feed-forward part - first make vectors bigger
+            # Feed-forward network - GROW stage (using normalized vectors)
             bigger_vectors = []
-            for vector in normalized_vectors:
+            for i in range(len(normalized_vectors)):
                 bigger_vector = []
-                for pos in range(self.embeddingSize * 4):  # 4 times bigger
-                    accum = 0
-                    for j in range(self.embeddingSize):
-                        accum += vector[j] * self.transformer["layers"][layer]["weights"]["feed_forward"]["grow"][pos * self.embeddingSize + j][0]
-                    bigger_vector.append(accum + self.transformer["layers"][layer]["biases"]["feed_forward"]["grow"][pos][0])
+                for j in range(self.embeddingSize * 4):
+                    sum_val = 0
+                    for k in range(self.embeddingSize):
+                        sum_val += normalized_vectors[i][k] * self.transformer["layers"][layer]["weights"]["feed_forward"]["grow"][k * (self.embeddingSize * 4) + j][0]
+                    bigger_vector.append(sum_val + self.transformer["layers"][layer]["biases"]["feed_forward"]["grow"][j][0])
                 bigger_vectors.append(bigger_vector)
 
             if return_cache:
@@ -1461,36 +1467,38 @@ class Transformer:
             if return_cache:
                 cache["layers"][layer]["feed_forward"]["after_relu"] = bigger_vectors.copy()
 
-            # Apply dropout to feed forward if in training mode
+            # Apply dropout if in training mode
             if training_mode:
-                dropout_rate = 0  # 10% dropout, switched to 0 for faster overfitting.
+                dropout_rate = 0  # 0% dropout for overfitting
                 for i in range(len(bigger_vectors)):
                     for j in range(len(bigger_vectors[i])):
                         if random([0, 1]) < dropout_rate:
                             bigger_vectors[i][j] = 0
                         else:
-                            # Scale to maintain expected value
                             bigger_vectors[i][j] /= (1 - dropout_rate)
 
-            # Shrink vectors back to original size
+            # Shrink vectors back to original size - SHRINK stage
             final_vectors = []
             for vector in bigger_vectors:
                 final_vector = []
                 for pos in range(self.embeddingSize):
-                    accum = 0  # Renamed from 'sum' to 'accum'
+                    accum = 0
                     for j in range(self.embeddingSize * 4):
                         accum += vector[j] * self.transformer["layers"][layer]["weights"]["feed_forward"]["shrink"][pos * (self.embeddingSize * 4) + j][0]
                     final_vector.append(accum + self.transformer["layers"][layer]["biases"]["feed_forward"]["shrink"][pos][0])
                 final_vectors.append(final_vector)
 
-            # Add residual connection
+            # Residual connection for feed-forward (using combined_vectors)
             for i in range(len(final_vectors)):
                 for j in range(self.embeddingSize):
-                    final_vectors[i][j] += normalized_vectors[i][j]
+                    final_vectors[i][j] += combined_vectors[i][j]
 
-            for i in range(len(final_vectors)): #last scaling
+            # REMOVED: Redundant normalization after feed-forward residual
+
+            # Optional safeguard scaling
+            for i in range(len(final_vectors)):
                 final_vectors[i] = scale_activation(final_vectors[i], base_gamma=5.0)
-                    
+                
             if return_cache:
                 cache["layers"][layer]["feed_forward"]["final"] = final_vectors.copy()
 
