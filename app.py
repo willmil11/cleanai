@@ -1620,7 +1620,7 @@ if flag:
     transformer = Transformer(True, {
         "contextSize": 64,              
         "embeddingSize": 32,            
-        "learningRate": 0.001,           
+        "learningRate": 0.0005,           
         "maxOutputSize": 16,            
         "layersAmount": 2,              
         "heads": 2,                     
@@ -1631,9 +1631,9 @@ if flag:
     })
 
     # Start training with SGD + Momentum
-    transformer.train(1000, optimizer="sgd")
+    transformer.train(1000, optimizer="adam")
 else:
-    transformer = Transformer(new=False, path="model_sgd.json", parameters={
+    transformer = Transformer(new=False, path="model_adam.json", parameters={
         "dataset": dataset
     })
 
