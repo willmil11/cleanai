@@ -191,17 +191,63 @@ class Transformer:
                if token[1] == 100257:
                    end_token = token[0]
                    break
+
+           print("Contextizing dataset...")
+           timer = timer_()
            self.contexted_dataset = []
+           self.response_token_masks = []  # For tracking which tokens are response tokens
+
            for item in self.dataset:
-               contexted_item = "user:\n" + item["input"] + "\nyou:\n" + item["output"] + end_token
-               self.contexted_dataset.append(contexted_item)
+               # Get the input and output
+               user_input = item["input"]
+               assistant_output = item["output"]
+               
+               # Format the full context
+               user_part = f"user:\n{user_input}\n"
+               system_marker = "you:\n"
+               assistant_part = assistant_output + end_token
+               
+               # Full context combines all parts
+               full_context = user_part + system_marker + assistant_part
+               self.contexted_dataset.append(full_context)
+               
+               # Now create a mask for which tokens are for model responses
+               # First, get token lengths of each part
+               user_tokens = self.tokenize(user_part)
+               system_tokens = self.tokenize(system_marker)
+               response_tokens = self.tokenize(assistant_part)
+               
+               # Create mask: False for user input and system marker, True for assistant output
+               # The mask is for positions where we're predicting response tokens
+               token_mask = []
+               token_mask.extend([False] * len(user_tokens))  # Don't train on user input
+               token_mask.extend([False] * len(system_tokens))  # Don't train on system marker
+               token_mask.extend([True] * (len(response_tokens)-1))  # Train on response (-1 because last token won't be predicted)
+               
+               self.response_token_masks.append(token_mask)
+            
            print("Contextized dataset in", timer_end(timer), "ms")
            
-           timer = timer_()
            print("Tokenizing contexted dataset...")
+           timer = timer_()
            self.tokenized_dataset = []
-           for item in self.contexted_dataset:
+           for i, item in enumerate(self.contexted_dataset):
                self.tokenized_dataset.append(self.tokenize(item))
+               
+               # Verify that our masks match the expected token count
+               expected_tokens = len(self.tokenized_dataset[-1]) - 1  # -1 because we predict next tokens
+               if len(self.response_token_masks[i]) != expected_tokens:
+                   print(f"Warning: Token mask length mismatch for item {i}.")
+                   print(f"  Expected {expected_tokens} mask entries but got {len(self.response_token_masks[i])}")
+                   
+                   # Adjust the mask if needed to avoid errors
+                   if len(self.response_token_masks[i]) < expected_tokens:
+                       # Extend with False (don't train on extra tokens)
+                       self.response_token_masks[i].extend([False] * (expected_tokens - len(self.response_token_masks[i])))
+                   else:
+                       # Truncate if too long
+                       self.response_token_masks[i] = self.response_token_masks[i][:expected_tokens]
+                   
            print("Tokenized contexted dataset in", timer_end(timer), "ms")
            print("Successfully initialized model")
        else:
@@ -578,6 +624,26 @@ class Transformer:
         # Calculate initial error using pure Python
         initial_error = [predicted_probs[i] - target_distribution[i] for i in range(len(predicted_probs))]
         
+        # Computing gradients for vocabulary projection parameters
+        print("Computing gradients for vocabulary projection parameters...")
+        vocab_proj_weight_gradients = [[0, 0, 0] for _ in range(len(self.transformer["vocab_projection"]["weights"]))]
+        vocab_proj_bias_gradients = [[0, 0, 0] for _ in range(len(self.transformer["vocab_projection"]["biases"]))]
+
+        # Calculate gradients for vocabulary projection weights and biases
+        for vocab_idx in range(len(self.vocab)):
+            # The error for this vocab token
+            error_val = initial_error[vocab_idx]
+            
+            # Calculate gradients for weights connecting to this vocab token
+            for embed_idx in range(self.embeddingSize):
+                # Gradient for weight = error * activation (last token embedding)
+                weight_idx = vocab_idx * self.embeddingSize + embed_idx
+                gradient = error_val * cache["layers"][-1]["feed_forward"]["final"][-1][embed_idx]
+                vocab_proj_weight_gradients[weight_idx][0] = gradient
+            
+            # Gradient for bias is just the error
+            vocab_proj_bias_gradients[vocab_idx][0] = error_val
+        
         # Initialize error gradients with zeros
         error_gradients = [[0.0 for _ in range(self.embeddingSize)] for _ in range(len(input_tokens))]
 
@@ -897,6 +963,60 @@ class Transformer:
                                                 # SGD update
                                                 nested_params[i][0] -= lr * grad_value
 
+        # Add this block to update vocabulary projection parameters
+        print("Updating vocabulary projection parameters...")
+
+        # Update weights
+        for i in range(len(self.transformer["vocab_projection"]["weights"])):
+            param = self.transformer["vocab_projection"]["weights"][i]
+            grad_value = vocab_proj_weight_gradients[i][0]
+            
+            # Add weight decay (L2 regularization)
+            grad_value += weight_decay * param[0]
+            
+            if optimizer == "adam":
+                # Adam update
+                param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
+                param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                
+                # Compute bias-corrected estimates
+                m_hat = param[1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                v_hat = param[2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                
+                # Update parameter
+                param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+            elif optimizer == "sgd_momentum":
+                # SGD with momentum update
+                param[1] = momentum_factor * param[1] + grad_value
+                param[0] -= lr * param[1]
+            else:
+                # SGD update
+                param[0] -= lr * grad_value
+
+        # Update biases
+        for i in range(len(self.transformer["vocab_projection"]["biases"])):
+            param = self.transformer["vocab_projection"]["biases"][i]
+            grad_value = vocab_proj_bias_gradients[i][0]
+            
+            if optimizer == "adam":
+                # Adam update
+                param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
+                param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                
+                # Compute bias-corrected estimates
+                m_hat = param[1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                v_hat = param[2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                
+                # Update parameter
+                param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+            elif optimizer == "sgd_momentum":
+                # SGD with momentum update
+                param[1] = momentum_factor * param[1] + grad_value
+                param[0] -= lr * param[1]
+            else:
+                # SGD update
+                param[0] -= lr * grad_value
+
         print("Updated parameters in", timer_end(timer), "ms")
         param_to_check = self.transformer["embeddings"][0][0]
         if optimizer == "adam":
@@ -967,8 +1087,12 @@ class Transformer:
             print(f"Epoch {epoch + 1}/{epochs}")
             print("-"*60 + "\n")
                 
-            # Calculate total IO pairs in the dataset
-            total_io_pairs = sum(len(tokens) - 1 for tokens in self.tokenized_dataset)
+            # Calculate total IO pairs in the dataset (only response tokens)
+            total_io_pairs = 0
+            for i, tokens in enumerate(self.tokenized_dataset):
+                token_mask = self.response_token_masks[i]
+                total_io_pairs += sum(token_mask)
+            
             processed_io_pairs = 0
 
             timer = timer_()
@@ -981,216 +1105,237 @@ class Transformer:
                 stimer = timer_()
                 print("Training on item", i + 1, "/", len(self.tokenized_dataset))
                 tokens = self.tokenized_dataset[i]
+                token_mask = self.response_token_masks[i]
                 
                 # Track dataset loss for the current item
                 dataset_total_loss = 0.0
                 sequence_positions = 0
                 
+                input_text = ""
+                
                 for j in range(len(tokens) - 1):
                     input_tokens = tokens[:j+1]
                     target_token = tokens[j+1]
-                    loss = self.train_step(input_tokens, target_token, optimizer, training_mode=True)
                     
-                    dataset_total_loss += loss
-                    sequence_positions += 1
-                    
-                    processed_io_pairs += 1
-                    
-                    # Compute progress for the current IO pair within the current item
-                    current_item_progress = ((j+1) / (len(tokens) - 1)) * 100
-                    # Compute overall progress across all IO pairs in the dataset
-                    overall_progress = (processed_io_pairs / total_io_pairs) * 100
-                    
-                    print(f"Loss: {loss:.4f} (IO pair {j+1}/{len(tokens)-1}) | " +
-                        f"Current IO pair progress: {current_item_progress:.2f}% | " +
-                        f"Overall IO pairs progress: {overall_progress:.2f}%", flush=True)
+                    # Check if we should train on this token
+                    if j < len(token_mask) and token_mask[j]:
+                        # This is a response token we should train on
+                        loss = self.train_step(input_tokens, target_token, optimizer, training_mode=True)
+                        
+                        dataset_total_loss += loss
+                        sequence_positions += 1
+                        
+                        processed_io_pairs += 1
+                        
+                        # Compute progress for the current IO pair within the current item
+                        # Count only the response tokens
+                        response_tokens_in_item = sum(token_mask)
+                        current_position_in_responses = sum(token_mask[:j+1])
+                        current_item_progress = (current_position_in_responses / response_tokens_in_item) * 100
+                        
+                        # Compute overall progress across all IO pairs in the dataset
+                        overall_progress = (processed_io_pairs / total_io_pairs) * 100
+                        
+                        print(f"Loss: {loss:.4f} (Response token {current_position_in_responses}/{response_tokens_in_item}) | " +
+                              f"Current item progress: {current_item_progress:.2f}% | " +
+                              f"Overall progress: {overall_progress:.2f}%", flush=True)
+                    else:
+                        # For non-response tokens, just run inference without training
+                        # This advances the context without updating weights
+                        # We actually don't need to run inference since train_step will
+                        # do a forward pass anyway for the next response token
+                        pass
                 
-                # Calculate average loss for this dataset item
-                avg_item_loss = dataset_total_loss / sequence_positions
-                batch_losses.append(avg_item_loss)
-                print(f"Average loss for item {i+1}: {avg_item_loss:.4f}")
+                # Skip items where we didn't train on any tokens
+                if sequence_positions > 0:
+                    # Calculate average loss for this dataset item
+                    avg_item_loss = dataset_total_loss / sequence_positions
+                    batch_losses.append(avg_item_loss)
+                    print(f"Average loss for item {i+1}: {avg_item_loss:.4f}")
+                    
                 print("Trained on item", i + 1, "in", timer_end(stimer), "ms")
                 
             # Calculate epoch average loss
-            avg_epoch_loss = sum(batch_losses) / len(batch_losses)
-            epoch_losses.append(avg_epoch_loss)
-            self.loss_history.append(avg_epoch_loss)
-            print(f"Epoch {epoch + 1} average loss: {avg_epoch_loss:.6f}")
-            
-            # Check for plateaus
-            if len(self.loss_history) >= loss_window_size:
-                avg_recent_loss = sum(self.loss_history[-loss_window_size:]) / loss_window_size
-                print(f"Average loss over last {loss_window_size} epochs: {avg_recent_loss:.6f}")
+            if len(batch_losses) > 0:  # Check that we had some valid batches
+                avg_epoch_loss = sum(batch_losses) / len(batch_losses)
+                epoch_losses.append(avg_epoch_loss)
+                self.loss_history.append(avg_epoch_loss)
+                print(f"Epoch {epoch + 1} average loss: {avg_epoch_loss:.6f}")
                 
                 # Check for plateaus
-                if best_loss == last_best_loss:
-                    plateau_counter += 1
-                    if plateau_counter >= plateau_patience:
-                        print(f"Warning: Training appears to be plateauing for {plateau_counter} epochs")
-                else:
-                    plateau_counter = 0
-                    last_best_loss = best_loss
-            
-            # Check if new best loss - if so, we'll prompt for testing
-            is_best_loss = avg_epoch_loss < best_loss
-            
-            # Auto-save when in sweet spot with significant progress
-            in_sweet_spot = sweet_spot_min <= avg_epoch_loss <= sweet_spot_max
-            first_time_in_sweet_spot = in_sweet_spot and last_saved_sweet_spot_loss == float('inf')
-            significant_progress = in_sweet_spot and (last_saved_sweet_spot_loss - avg_epoch_loss >= 0.5)
-            
-            if first_time_in_sweet_spot or significant_progress:
-                # Format loss with 2 decimal places for filename
-                loss_str = f"{avg_epoch_loss:.2f}"
-                save_path = f"model_{epoch+1}_{loss_str}_{optimizer}_sweetspot.json"
+                if len(self.loss_history) >= loss_window_size:
+                    avg_recent_loss = sum(self.loss_history[-loss_window_size:]) / loss_window_size
+                    print(f"Average loss over last {loss_window_size} epochs: {avg_recent_loss:.6f}")
+                    
+                    # Check for plateaus
+                    if best_loss == last_best_loss:
+                        plateau_counter += 1
+                        if plateau_counter >= plateau_patience:
+                            print(f"Warning: Training appears to be plateauing for {plateau_counter} epochs")
+                    else:
+                        plateau_counter = 0
+                        last_best_loss = best_loss
                 
-                if first_time_in_sweet_spot:
-                    print("\n" + "-"*60)
-                    print(f"REACHED SWEET SPOT LOSS! Auto-saving model")
-                    print("-"*60 + "\n")
-                else:
-                    print("\n" + "-"*60)
-                    print(f"SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model")
-                    print(f"Previous saved: {last_saved_sweet_spot_loss:.2f}, Current: {avg_epoch_loss:.2f}")
-                    print("-"*60 + "\n")
+                # Check if new best loss - if so, we'll prompt for testing
+                is_best_loss = avg_epoch_loss < best_loss
                 
-                try:
-                    self.save(save_path)
-                    print(f"Sweet spot model saved to {save_path}")
-                    last_saved_sweet_spot_loss = avg_epoch_loss  # Update last saved loss
-                except Exception as e:
-                    print(f"Error saving sweet spot model: {e}")
-            
-            # Update best loss if needed
-            if is_best_loss:
-                # If best_loss isn't infinity, report the previous best loss
-                if best_loss != float('inf'):
-                    print("\n" + "-"*60)
-                    print(f"NEW BEST LOSS ACHIEVED! Previous best loss was: {best_loss:.6f}")
-                    print("-"*60 + "\n")
-                else:
-                    print("\n" + "-"*60)
-                    print("NEW BEST LOSS ACHIEVED!")
-                    print("-"*60 + "\n")
+                # Auto-save when in sweet spot with significant progress
+                in_sweet_spot = sweet_spot_min <= avg_epoch_loss <= sweet_spot_max
+                first_time_in_sweet_spot = in_sweet_spot and last_saved_sweet_spot_loss == float('inf')
+                significant_progress = in_sweet_spot and (last_saved_sweet_spot_loss - avg_epoch_loss >= 0.5)
                 
-                best_loss = avg_epoch_loss  # Update best_loss
-                print(f"New best loss: {best_loss:.6f}! Let's test the model:")
-            
-            # Allow testing after each epoch completion (if not already prompting for best loss)
-            should_prompt = not is_best_loss  # Only prompt if we're not already prompting for best loss
-            
-            # Prompt testing interface (used for both best loss and end of epoch)
-            if is_best_loss or should_prompt:
-                # Let user test the model with a timeout
-                continue_testing = True
+                if first_time_in_sweet_spot or significant_progress:
+                    # Format loss with 2 decimal places for filename
+                    loss_str = f"{avg_epoch_loss:.2f}"
+                    save_path = f"model_{epoch+1}_{loss_str}_{optimizer}_sweetspot.json"
+                    
+                    if first_time_in_sweet_spot:
+                        print("\n" + "-"*60)
+                        print(f"REACHED SWEET SPOT LOSS! Auto-saving model")
+                        print("-"*60 + "\n")
+                    else:
+                        print("\n" + "-"*60)
+                        print(f"SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model")
+                        print(f"Previous saved: {last_saved_sweet_spot_loss:.2f}, Current: {avg_epoch_loss:.2f}")
+                        print("-"*60 + "\n")
+                    
+                    try:
+                        self.save(save_path)
+                        print(f"Sweet spot model saved to {save_path}")
+                        last_saved_sweet_spot_loss = avg_epoch_loss  # Update last saved loss
+                    except Exception as e:
+                        print(f"Error saving sweet spot model: {e}")
                 
-                while continue_testing:
-                    # Construct appropriate prompt based on whether it's best loss or regular epoch end
-                    prompt_text = "Enter test input" if is_best_loss else f"Epoch {epoch+1} complete. Enter test input"
+                # Update best loss if needed
+                if is_best_loss:
+                    # If best_loss isn't infinity, report the previous best loss
+                    if best_loss != float('inf'):
+                        print("\n" + "-"*60)
+                        print(f"NEW BEST LOSS ACHIEVED! Previous best loss was: {best_loss:.6f}")
+                        print("-"*60 + "\n")
+                    else:
+                        print("\n" + "-"*60)
+                        print("NEW BEST LOSS ACHIEVED!")
+                        print("-"*60 + "\n")
                     
-                    # Get available optimizer alternatives
-                    optimizer_options = []
-                    if optimizer != "sgd":
-                        optimizer_options.append("sgd")
-                    if optimizer != "sgd_momentum":
-                        optimizer_options.append("sgd_momentum")
-                    if optimizer != "adam":
-                        optimizer_options.append("adam")
+                    best_loss = avg_epoch_loss  # Update best_loss
+                    print(f"New best loss: {best_loss:.6f}! Let's test the model:")
+                
+                # Allow testing after each epoch completion (if not already prompting for best loss)
+                should_prompt = not is_best_loss  # Only prompt if we're not already prompting for best loss
+                
+                # Prompt testing interface (used for both best loss and end of epoch)
+                if is_best_loss or should_prompt:
+                    # Let user test the model with a timeout
+                    continue_testing = True
                     
-                    optimizer_switch_options = " or ".join([f"/switch_to_{opt}" for opt in optimizer_options])
-                    
-                    # Use a thread-based approach for input with timeout
-                    user_input = [None]
-                    input_received = [False]
-                    
-                    def input_thread_func():
-                        try:
-                            user_input[0] = input(f"{prompt_text} within 30 seconds (or /stop_training, /continue, /save, or {optimizer_switch_options}): ")
-                            input_received[0] = True
-                        except:
-                            pass
-                    
-                    # Start input thread
-                    input_thread = threading.Thread(target=input_thread_func)
-                    input_thread.daemon = True
-                    input_thread.start()
-                    
-                    # Wait for input or timeout
-                    timeout = 30
-                    start_time = time.time()
-                    while not input_received[0] and time.time() - start_time < timeout:
-                        time.sleep(0.1)
-                    
-                    if not input_received[0]:
-                        # Properly handle timeout - explicitly break out of this testing loop
-                        print("\nTimeout reached. Automatically continuing training...")
-                        continue_testing = False
-                        # Don't need to continue past this point if timed out
-                        break
-                    
-                    # Process user input
-                    test_input = user_input[0]
-                    
-                    if test_input == "/stop_training":
-                        continue_training = False
-                        continue_testing = False
-                        print("Training will stop after this epoch")
-                    elif test_input == "/continue":
-                        continue_testing = False
-                        print("Continuing training...")
-                    elif test_input.startswith("/switch_to_") and test_input[11:] in ["sgd", "sgd_momentum", "adam"]:
-                        new_optimizer = test_input[11:]
-                        continue_testing = False
-                        optimizer = new_optimizer
-                        print(f"Switching to {new_optimizer.upper()} optimizer for next epochs")
-                    elif test_input == "/save":
-                        # New thread for save path input
-                        save_input = [None]
-                        save_received = [False]
+                    while continue_testing:
+                        # Construct appropriate prompt based on whether it's best loss or regular epoch end
+                        prompt_text = "Enter test input" if is_best_loss else f"Epoch {epoch+1} complete. Enter test input"
                         
-                        def save_thread_func():
+                        # Get available optimizer alternatives
+                        optimizer_options = []
+                        if optimizer != "sgd":
+                            optimizer_options.append("sgd")
+                        if optimizer != "sgd_momentum":
+                            optimizer_options.append("sgd_momentum")
+                        if optimizer != "adam":
+                            optimizer_options.append("adam")
+                        
+                        optimizer_switch_options = " or ".join([f"/switch_to_{opt}" for opt in optimizer_options])
+                        
+                        # Use a thread-based approach for input with timeout
+                        user_input = [None]
+                        input_received = [False]
+                        
+                        def input_thread_func():
                             try:
-                                save_input[0] = input(f"Enter save path within 30 seconds (or press Enter for default 'model_{optimizer}.json'): ")
-                                save_received[0] = True
+                                user_input[0] = input(f"{prompt_text} within 30 seconds (or /stop_training, /continue, /save, or {optimizer_switch_options}): ")
+                                input_received[0] = True
                             except:
                                 pass
                         
-                        # Start save input thread
-                        save_thread = threading.Thread(target=save_thread_func)
-                        save_thread.daemon = True
-                        save_thread.start()
+                        # Start input thread
+                        input_thread = threading.Thread(target=input_thread_func)
+                        input_thread.daemon = True
+                        input_thread.start()
                         
                         # Wait for input or timeout
+                        timeout = 30
                         start_time = time.time()
-                        while not save_received[0] and time.time() - start_time < timeout:
+                        while not input_received[0] and time.time() - start_time < timeout:
                             time.sleep(0.1)
                         
-                        if not save_received[0]:
-                            # Timeout occurred
-                            print(f"\nTimeout reached. Using default path 'model_{optimizer}.json'")
-                            save_path = f"model_{optimizer}.json"
-                        else:
-                            save_path = save_input[0] if save_input[0] else f"model_{optimizer}.json"
+                        if not input_received[0]:
+                            # Properly handle timeout - explicitly break out of this testing loop
+                            print("\nTimeout reached. Automatically continuing training...")
+                            continue_testing = False
+                            # Don't need to continue past this point if timed out
+                            break
                         
-                        try:
-                            self.save(save_path)
-                            print(f"Model saved to {save_path}")
-                        except Exception as e:
-                            print(f"Error saving model: {e}")
-                    else:
-                        try:
-                            def generate_response(text, temp=1e-10):
-                                # In your interactive loop:
-                                formatted_input = f"user:\n{text}\nyou:\n"
-                                print(f"Debug - Formatted input: '{formatted_input}'")
-                                tokenized = self.tokenize(formatted_input)
-                                print(f"Debug - Tokenized input: {tokenized}")
-                                output = self.generate(formatted_input, temperature=1e-10)
-                            output = generate_response(test_input)
-                            print(f"Generated output: {output}")
-                        except Exception as e:
-                            print(f"Error generating output: {e}")
-                
+                        # Process user input
+                        test_input = user_input[0]
+                        
+                        if test_input == "/stop_training":
+                            continue_training = False
+                            continue_testing = False
+                            print("Training will stop after this epoch")
+                        elif test_input == "/continue":
+                            continue_testing = False
+                            print("Continuing training...")
+                        elif test_input.startswith("/switch_to_") and test_input[11:] in ["sgd", "sgd_momentum", "adam"]:
+                            new_optimizer = test_input[11:]
+                            continue_testing = False
+                            optimizer = new_optimizer
+                            print(f"Switching to {new_optimizer.upper()} optimizer for next epochs")
+                        elif test_input == "/save":
+                            # New thread for save path input
+                            save_input = [None]
+                            save_received = [False]
+                            
+                            def save_thread_func():
+                                try:
+                                    save_input[0] = input(f"Enter save path within 30 seconds (or press Enter for default 'model_{optimizer}.json'): ")
+                                    save_received[0] = True
+                                except:
+                                    pass
+                            
+                            # Start save input thread
+                            save_thread = threading.Thread(target=save_thread_func)
+                            save_thread.daemon = True
+                            save_thread.start()
+                            
+                            # Wait for input or timeout
+                            start_time = time.time()
+                            while not save_received[0] and time.time() - start_time < timeout:
+                                time.sleep(0.1)
+                            
+                            if not save_received[0]:
+                                # Timeout occurred
+                                print(f"\nTimeout reached. Using default path 'model_{optimizer}.json'")
+                                save_path = f"model_{optimizer}.json"
+                            else:
+                                save_path = save_input[0] if save_input[0] else f"model_{optimizer}.json"
+                            
+                            try:
+                                self.save(save_path)
+                                print(f"Model saved to {save_path}")
+                            except Exception as e:
+                                print(f"Error saving model: {e}")
+                        else:
+                            try:
+                                def generate_response(text, temp=1e-10):
+                                    # In your interactive loop:
+                                    formatted_input = f"user:\n{text}\nyou:\n"
+                                    print(f"Debug - Formatted input: '{formatted_input}'")
+                                    tokenized = self.tokenize(formatted_input)
+                                    print(f"Debug - Tokenized input: {tokenized}")
+                                    output = self.generate(formatted_input, temperature=1e-10)
+                                output = generate_response(test_input)
+                                print(f"Generated output: {output}")
+                            except Exception as e:
+                                print(f"Error generating output: {e}")
+                    
             print("Epoch", epoch + 1, "completed in", timer_end(timer), "ms")
         
         print(f"\n{'='*40}\nTraining completed after {len(epoch_losses)} epochs\nFinal loss: {epoch_losses[-1]:.6f}\nBest loss: {best_loss:.6f}\n{'='*40}\n")
