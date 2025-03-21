@@ -186,48 +186,67 @@ class Transformer:
 
            timer = timer_()
            print("Contextizing dataset...")
+           timer = timer_()
+           self.contexted_dataset = []
+           self.response_token_masks = []  # For tracking which tokens are response tokens
+   
+           # Find end token
            end_token = None
            for token in self.vocab:
                if token[1] == 100257:
                    end_token = token[0]
                    break
-
-           print("Contextizing dataset...")
-           timer = timer_()
-           self.contexted_dataset = []
-           self.response_token_masks = []  # For tracking which tokens are response tokens
-
+   
            for item in self.dataset:
-               # Get the input and output
-               user_input = item["input"]
-               assistant_output = item["output"]
+               # Get all input/output pairs from the item
+               user_inputs = item["inputs"]
+               assistant_outputs = item["outputs"]
                
-               # Format the full context
-               user_part = f"user:\n{user_input}\n"
-               system_marker = "you:\n"
-               assistant_part = assistant_output + end_token
+               # Make sure both lists have the same length
+               if len(user_inputs) != len(assistant_outputs):
+                   print(f"Warning: inputs and outputs counts don't match in item")
+                   continue
                
-               # Full context combines all parts
-               full_context = user_part + system_marker + assistant_part
-               self.contexted_dataset.append(full_context)
-               
-               # Now create a mask for which tokens are for model responses
-               # First, get token lengths of each part
-               user_tokens = self.tokenize(user_part)
-               system_tokens = self.tokenize(system_marker)
-               response_tokens = self.tokenize(assistant_part)
-               
-               # Create mask: False for user input and system marker, True for assistant output
-               # The mask is for positions where we're predicting response tokens
+               # Full context string for this item
+               full_context = ""
+               # Mask to track which tokens are part of assistant responses (for training)
                token_mask = []
-               token_mask.extend([False] * len(user_tokens))  # Don't train on user input
-               token_mask.extend([False] * len(system_tokens))  # Don't train on system marker
-               token_mask.extend([True] * (len(response_tokens)-1))  # Train on response (-1 because last token won't be predicted)
                
+               # Process each conversation turn
+               for i, (user_text, assistant_text) in enumerate(zip(user_inputs, assistant_outputs)):
+                   # Format user part
+                   user_part = f"user:\n{user_text}\n"
+                   user_tokens = self.tokenize(user_part)
+                   full_context += user_part
+                   # We don't train on predicting user tokens
+                   token_mask.extend([False] * len(user_tokens))
+                   
+                   # Format system marker and assistant part
+                   system_marker = "you:\n"
+                   system_tokens = self.tokenize(system_marker)
+                   full_context += system_marker
+                   # We don't train on predicting system marker tokens
+                   token_mask.extend([False] * len(system_tokens))
+                   
+                   # Add assistant response with end token
+                   assistant_part = assistant_text + end_token
+                   assistant_tokens = self.tokenize(assistant_part)
+                   full_context += assistant_part
+                   # We train on predicting ALL assistant tokens INCLUDING the end token
+                   token_mask.extend([True] * len(assistant_tokens))
+                   
+                   # Only add a newline after the assistant response if it's not the last turn
+                   if i < len(user_inputs) - 1:
+                       full_context += "\n"
+                       # We don't train on predicting newline tokens
+                       token_mask.extend([False])
+               
+               # Add the fully formatted conversation to the dataset
+               self.contexted_dataset.append(full_context)
                self.response_token_masks.append(token_mask)
-            
+                       
            print("Contextized dataset in", timer_end(timer), "ms")
-           
+
            print("Tokenizing contexted dataset...")
            timer = timer_()
            self.tokenized_dataset = []
