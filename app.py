@@ -36,9 +36,9 @@ try:
     import tiktoken
 except Exception:
     print("Failed to import tiktoken for tokenization, do you wish to try to auto install it?")
-    print("Note: You need pip installed and it will be ran in --break-system-packages mode, we are not liable for any damages.")
+    print("Note: You need pip installed and it will be ran in --break-system-packages mode, I am not liable for any damages.")
     while True:
-        answer = input("Do you wish to continue? (y/n)")
+        answer = input("Do you wish to continue? (y/n) ")
         if answer.lower() == "y":
             from subprocess import run
             try:
@@ -76,9 +76,9 @@ try:
     from inputimeout import inputimeout, TimeoutOccurred
 except Exception:
     print("Failed to import inputimeout for interactive mode, do you wish to try to auto install it?")
-    print("Note: You need pip installed and it will be ran in --break-system-packages mode, we are not liable for any damages.")
+    print("Note: You need pip installed and it will be ran in --break-system-packages mode, I am not liable for any damages.")
     while True:
-        answer = input("Do you wish to continue? (y/n)")
+        answer = input("Do you wish to continue? (y/n) ")
         if answer.lower() == "y":
             from subprocess import run
             try:
