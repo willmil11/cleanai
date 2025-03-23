@@ -38,7 +38,10 @@ I may even add an API to it so you can easily make an http request to run or tra
 To support this project you can star the repo and you can send me suggestions through discord (willmil11) or email (willmil111012@gmail.com). Please don't create pull requests as this is a project of mine to learn I therefore want to code and implement everything myself, even if your suggestions are welcome, I want to implement them myself.
 
 ## My model keeps overfiting, what do I do?
-That's completely normal, for testing purposes I disabled dropout and some other stuff to make the model overfit on purpose, In future updates I'll make it more user friendly to enable/disable this but if you know how to use Claude/Chatgpt correctly you can re-enable the anti-overfiting optimisations in like 2 minutes. 
+That's completely normal, for testing purposes I disabled dropout and some other stuff to make the model overfit on purpose, In future updates I'll make it more user friendly to enable/disable this but rn you can just search for "overfiting" by hitting ctrl + f and typing "overfiting" and you'll find red comments or if you don't have the better comments extension, comments starting with "#!" that explain what needs to be done to re-enable anti-overfiting optimizations.
+
+## Why is it saying "Extreme scaling"?
+So sometimes numbers get too big, and we're at risk of them being so big that python will crash and turn them into nans while trying to represent them which is bad because it'll destroy all of the calculations where those numbers that turned into nans were supposed to be used. So we scale those numbers down to keep precision without risking nans.
 
 ## Who am I and what does this project mean to me?
 I'm William, a 14 yo french programmer and this is my most ambitious project yet. It took an insane amount of planning, coding and debugging but it was sooo worth it.

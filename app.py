@@ -44,7 +44,11 @@ except Exception:
             try:
                 print("Trying to install tiktoken using pip...")
                 try:
-                    run(["pip", "install", "tiktoken", "--break-system-packages"], check=True)
+                    import platform
+                    if platform.system() == "Linux":
+                        run(["pip", "install", "tiktoken", "--break-system-packages"], check=True)
+                    else:
+                        run(["pip", "install", "tiktoken"], check=True)
                 except KeyboardInterrupt:
                     print("You hit Ctrl+C, exiting...")
                     exit(0)
@@ -80,7 +84,11 @@ except Exception:
             try:
                 print("Trying to install inputimeout using pip...")
                 try:
-                    run(["pip", "install", "inputimeout", "--break-system-packages"], check=True)
+                    import platform
+                    if platform.system() == "Linux":
+                        run(["pip", "install", "inputimeout", "--break-system-packages"], check=True)
+                    else:
+                        run(["pip", "install", "inputimeout"], check=True)
                 except KeyboardInterrupt:
                     print("You hit Ctrl+C, exiting...")
                     exit(0)
@@ -584,6 +592,7 @@ class Transformer:
         predicted_probs = self.softmax(predicted_scores)
         
         # Create smoothed target distribution
+        #! Set to 0 for better overfiting, for actual training set epsilon to 0.1 again.
         epsilon = 0 #Changed from 0.1 to 0 for better overfitting
         vocab_size = len(self.vocab)
         target_distribution = [(epsilon / (vocab_size - 1)) for _ in range(vocab_size)]
@@ -923,6 +932,7 @@ class Transformer:
         print(f"Using {optimizer} optimizer...")
         
         # Weight decay parameter
+        #! Set to 0 for better overfiting, set to 1e-5 or bigger for actual training.
         weight_decay = 0  # L2 regularization factor, changed from 1e-5 to 0 for faster overfitting
 
         # For SGD with momentum
@@ -1719,6 +1729,7 @@ class Transformer:
 
             # Apply dropout to attention output if in training mode
             if training_mode:
+                #! Set to 0 for overfiting, for actual training, set this back to 0.1 or something like 0.2 (dropout 1)
                 dropout_rate = 0  # 10% dropout, changed to 0 because we wanna overfit
                 for i in range(len(combined_vectors)):
                     for j in range(len(combined_vectors[i])):
@@ -1774,6 +1785,7 @@ class Transformer:
 
             # Apply dropout if in training mode
             if training_mode:
+                #! Set to 0 for overfiting, for actual training, set this back to 0.1 or something like 0.2 (dropout 2)
                 dropout_rate = 0  # 0% dropout for overfitting
                 for i in range(len(bigger_vectors)):
                     for j in range(len(bigger_vectors[i])):

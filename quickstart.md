@@ -26,3 +26,11 @@ If you're really serious about this and somehow didn't switch to a well establis
 
 ## Interactive mode
 Interactive mode will trigger every time a new epoch is completed and will expire after a 30 seconds timeout if you don't respond to the "Are you there" prompt. It will also trigger after training and pretraining. In any interractive mode console you can type "/help" and press enter for a list of commands. Default temperature when testing the model will be 0.7 making it lower will make the model more deterministic and predictible, while making it higher will make it more random. 0.7 is a good balence.
+
+## What each file does
+- app.py: Main code, implementation of the actual transformers.
+- dataset.json: For training, making the ai an assistant instead of just an autocomplete on steroids.
+- quickstart.md: What you're reading rn.
+- README.md: Main readme, what you land on when you go on the repo on github.
+- requirements.txt: Dependencies list if you want to install in venv environement with ```pip install -r requirements.txt``` but if you don't want to you can just let the script auto install the dependencies.
+- vocabulary.json: Tiktoken gpt4 vocabulary but cleaned of tokens I didn't like.
