@@ -1844,7 +1844,9 @@ class Transformer:
         if return_cache:
             return [self.vocab[next_token][0], next_token], cache
         return [self.vocab[next_token][0], next_token]  # Return [token_string, token_id]
-    def generate(self, context, temperature=self.temperature):
+    def generate(self, context, temperature=False):
+        if temperature == False:
+            temperature = self.temperature
         current_context = context
         output = ""
         
@@ -2010,7 +2012,7 @@ if flag:
         "maxOutputSize": 16, #? Self explanatory.
         "layersAmount": 2, #? The model will be deeper and therefore have deeper understanding if you make.
                            #? make this higher but it will be heavier to run.
-        "heads": 2,                     
+        "heads": 2, #? If you raise this number, the model will understand better what queries relate to                    
         "use_he_init": True, #? He initialization is enabled by default here, you can disable it for purely
                              #? random init but I don't recommand it.
         "biasesinitrange": [-0.01, 0.01], #? You can try to tweak this if you want but this is generally a
