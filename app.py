@@ -1,10 +1,80 @@
-import tiktoken
 from sys import exit
 import time
 import random as rd
 import math
 import uuid
 import json
+
+try:
+    import tiktoken
+except Exception:
+    print("Failed to import tiktoken for tokenization, do you wish to try to auto install it?")
+    print("Note: You need pip installed and it will be ran in --break-system-packages mode, we are not liable for any damages.")
+    while True:
+        answer = input("Do you wish to continue? (y/n)")
+        if answer.lower() == "y":
+            from subprocess import run
+            try:
+                print("Trying to install tiktoken using pip...")
+                try:
+                    run(["pip", "install", "tiktoken", "--break-system-packages"], check=True)
+                except KeyboardInterrupt:
+                    print("You hit Ctrl+C, exiting...")
+                    exit(0)
+                print("Successfully installed tiktoken")
+                print("Trying to import tiktoken...")
+                try:
+                    import tiktoken
+                except Exception:
+                    print("Failed to import tiktoken even after installing it, exiting...")
+                    exit(1)
+                break
+            except Exception as e:
+                print(f"Failed to install tiktoken: {e}")
+                exit(1)
+        else:
+            if answer.lower() == "n":
+                print("Exiting...")
+                exit(1)
+            else:
+                print("Invalid answer, valid answers are 'y' and 'n'")
+                continue
+
+
+try:
+    from inputimeout import inputimeout, TimeoutOccurred
+except Exception:
+    print("Failed to import inputimeout for interactive mode, do you wish to try to auto install it?")
+    print("Note: You need pip installed and it will be ran in --break-system-packages mode, we are not liable for any damages.")
+    while True:
+        answer = input("Do you wish to continue? (y/n)")
+        if answer.lower() == "y":
+            from subprocess import run
+            try:
+                print("Trying to install inputimeout using pip...")
+                try:
+                    run(["pip", "install", "inputimeout", "--break-system-packages"], check=True)
+                except KeyboardInterrupt:
+                    print("You hit Ctrl+C, exiting...")
+                    exit(0)
+                print("Successfully installed inputimeout")
+                print("Trying to import inputimeout...")
+                try:
+                    from inputimeout import inputimeout, TimeoutOccurred
+                except Exception:
+                    print("Failed to import inputimeout even after installing it, exiting...")
+                    exit(1)
+                break
+            except Exception as e:
+                print(f"Failed to install inputimeout: {e}")
+                exit(1)
+        else:
+            if answer.lower() == "n":
+                print("Exiting...")
+                exit(1)
+            else:
+                print("Invalid answer, valid answers are 'y' and 'n'")
+                continue
 
 printdontprint = True
 
@@ -49,6 +119,7 @@ class Transformer:
        print("Successfully read vocabulary file")
 
        self.encoder = tiktoken.get_encoding("cl100k_base")  # Same as GPT-4
+       self.temperature = 0.7
 
        if new:
            print("Initializing model...")
@@ -1245,115 +1316,11 @@ class Transformer:
                 
                 # Prompt testing interface (used for both best loss and end of epoch)
                 if is_best_loss or should_prompt:
-                    # Let user test the model with a timeout
-                    continue_testing = True
-                    
-                    while continue_testing:
-                        # Construct appropriate prompt based on whether it's best loss or regular epoch end
-                        prompt_text = "Enter test input" if is_best_loss else f"Epoch {epoch+1} complete. Enter test input"
-                        
-                        # Get available optimizer alternatives
-                        optimizer_options = []
-                        if optimizer != "sgd":
-                            optimizer_options.append("sgd")
-                        if optimizer != "sgd_momentum":
-                            optimizer_options.append("sgd_momentum")
-                        if optimizer != "adam":
-                            optimizer_options.append("adam")
-                        
-                        optimizer_switch_options = " or ".join([f"/switch_to_{opt}" for opt in optimizer_options])
-                        
-                        # Use a thread-based approach for input with timeout
-                        user_input = [None]
-                        input_received = [False]
-                        
-                        def input_thread_func():
-                            try:
-                                user_input[0] = input(f"{prompt_text} within 30 seconds (or /stop_training, /continue, /save, or {optimizer_switch_options}): ")
-                                input_received[0] = True
-                            except:
-                                pass
-                        
-                        # Start input thread
-                        input_thread = threading.Thread(target=input_thread_func)
-                        input_thread.daemon = True
-                        input_thread.start()
-                        
-                        # Wait for input or timeout
-                        timeout = 30
-                        start_time = time.time()
-                        while not input_received[0] and time.time() - start_time < timeout:
-                            time.sleep(0.1)
-                        
-                        if not input_received[0]:
-                            # Properly handle timeout - explicitly break out of this testing loop
-                            print("\nTimeout reached. Automatically continuing training...")
-                            continue_testing = False
-                            # Don't need to continue past this point if timed out
-                            break
-                        
-                        # Process user input
-                        test_input = user_input[0]
-                        
-                        if test_input == "/stop_training":
-                            continue_training = False
-                            continue_testing = False
-                            print("Training will stop after this epoch")
-                        elif test_input == "/continue":
-                            continue_testing = False
-                            print("Continuing training...")
-                        elif test_input.startswith("/switch_to_") and test_input[11:] in ["sgd", "sgd_momentum", "adam"]:
-                            new_optimizer = test_input[11:]
-                            continue_testing = False
-                            optimizer = new_optimizer
-                            print(f"Switching to {new_optimizer.upper()} optimizer for next epochs")
-                        elif test_input == "/save":
-                            # New thread for save path input
-                            save_input = [None]
-                            save_received = [False]
-                            
-                            def save_thread_func():
-                                try:
-                                    save_input[0] = input(f"Enter save path within 30 seconds (or press Enter for default 'model_{optimizer}.json'): ")
-                                    save_received[0] = True
-                                except:
-                                    pass
-                            
-                            # Start save input thread
-                            save_thread = threading.Thread(target=save_thread_func)
-                            save_thread.daemon = True
-                            save_thread.start()
-                            
-                            # Wait for input or timeout
-                            start_time = time.time()
-                            while not save_received[0] and time.time() - start_time < timeout:
-                                time.sleep(0.1)
-                            
-                            if not save_received[0]:
-                                # Timeout occurred
-                                print(f"\nTimeout reached. Using default path 'model_{optimizer}.json'")
-                                save_path = f"model_{optimizer}.json"
-                            else:
-                                save_path = save_input[0] if save_input[0] else f"model_{optimizer}.json"
-                            
-                            try:
-                                self.save(save_path)
-                                print(f"Model saved to {save_path}")
-                            except Exception as e:
-                                print(f"Error saving model: {e}")
-                        else:
-                            try:
-                                def generate_response(text, temp=1e-10):
-                                    # In your interactive loop:
-                                    formatted_input = f"user:\n{text}\nyou:\n"
-                                    print(f"Debug - Formatted input: '{formatted_input}'")
-                                    tokenized = self.tokenize(formatted_input)
-                                    print(f"Debug - Tokenized input: {tokenized}")
-                                    output = self.generate(formatted_input, temperature=1e-10)
-                                output = generate_response(test_input)
-                                print(f"Generated output: {output}")
-                            except Exception as e:
-                                print(f"Error generating output: {e}")
+                    result = self.interactive_test_loop(epoch, avg_epoch_loss, optimizer)
+                    if result == "STOP_TRAINING":
+                        break
+                    else:
+                        optimizer = result
                     
             print("Epoch", epoch + 1, "completed in", timer_end(timer), "ms")
         
@@ -1703,7 +1670,7 @@ class Transformer:
         if return_cache:
             return [self.vocab[next_token][0], next_token], cache
         return [self.vocab[next_token][0], next_token]  # Return [token_string, token_id]
-    def generate(self, context, temperature=0.8):
+    def generate(self, context, temperature=self.temperature):
         current_context = context
         output = ""
         
@@ -1771,6 +1738,79 @@ class Transformer:
         
         print(f"Debug - Final generated output: '{output}'")
         return output
+    def interactive_test_loop(self, epoch_num, avg_loss, optimizer):
+        print("\n[🧪 Interactive Test Mode]")
+        try:
+            print("If you're still here, type anything to enter testing mode.")
+            poke = inputimeout(prompt="Are you there? (30s): ", timeout=30)
+        except TimeoutOccurred:
+            print("[Info] Timeout. Skipping testing.")
+            return optimizer
+
+        while True:
+            try:
+                user_input = input(">>> ").strip()
+            except KeyboardInterrupt:
+                print("\n[Info] Skipping interactive testing...")
+                break
+
+            if user_input == "":
+                print("[Info] Skipping...")
+                break
+            elif user_input == "/continue":
+                print("[Info] Continuing to next epoch...")
+                break
+            elif user_input == "/stop":
+                print("[Info] Stopping training.")
+                return "STOP_TRAINING"
+            elif user_input.startswith("/save"):
+                parts = user_input.split(" ", 1)
+                save_path = parts[1] if len(parts) > 1 else f"model_{optimizer}.json"
+                try:
+                    self.save(save_path)
+                    print(f"[Info] Model saved to {save_path}")
+                except Exception as e:
+                    print(f"[Error] Could not save: {e}")
+            elif user_input.startswith("/switch_to_"):
+                new_opt = user_input[len("/switch_to_"):]
+                if new_opt in ["adam", "sgd", "sgd_momentum"]:
+                    print(f"[Info] Switching to {new_opt.upper()}")
+                    return new_opt
+                else:
+                    print("[Error] Unknown optimizer.")
+            elif user_input.startswith("/temperature"):
+                parts = user_input.split(" ", 1)
+                if len(parts) < 2:
+                    print(f"[Current Temperature] {self.temperature}")
+                else:
+                    try:
+                        temp = float(parts[1])
+                        self.temperature = temp
+                        print(f"[Info] Set temperature to {temp}")
+                    except:
+                        print("[Error] Invalid value.")
+            elif user_input == "/info":
+                print(f"[Info] Epoch: {epoch_num+1}, Loss: {avg_loss:.4f}, Optimizer: {optimizer}, Temperature: {self.temperature}")
+            elif user_input == "/help":
+                print("Available commands:")
+                print("  /continue        Continue training")
+                print("  /stop            Stop training")
+                print("  /save [path]     Save model (optional path)")
+                print("  /switch_to_*     Switch optimizer (sgd, adam, sgd_momentum)")
+                print("  /temperature X   Set or view temperature")
+                print("  /info            Show current training info")
+                print("  /help            Show this help message")
+            else:
+                prompt = f"user:\n{user_input}\nyou:\n"
+                print("Input tokens:", [t[0] for t in self.tokenize(prompt)])
+                print("Generated response:")
+                try:
+                    output = self.generate(prompt, temperature=self.temperature)
+                    print(output)
+                except Exception as e:
+                    print(f"[Error] Failed to generate: {e}")
+
+        return optimizer
 
 try:
     dataset = json.loads(open("dataset.json", "r").read())
@@ -1778,7 +1818,7 @@ except Exception:
     print("Failed to read dataset, exiting...")
     exit(1)
 
-flag = True
+flag = False
 
 if flag:
     transformer = Transformer(True, {
@@ -1803,29 +1843,50 @@ else:
 
 try:
     print("\nEntering interactive mode. Type a message or command:")
-    print("Commands: /save [path]")
-    
-    def generate_response(text, temp=1e-10):
-        # In your interactive loop:
+    print("Commands: /save [path], /temperature [value], /exit")
+
+    def generate_response(text):
         formatted_input = f"user:\n{text}\nyou:\n"
         print(f"Debug - Formatted input: '{formatted_input}'")
         tokenized = transformer.tokenize(formatted_input)
         print(f"Debug - Tokenized input: {tokenized}")
-        output = transformer.generate(formatted_input, temperature=1e-10)
-    
+        return transformer.generate(formatted_input, temperature=transformer.temperature)
+
     while True:
-        text = input("> ")
+        text = input("> ").strip()
+
         if text.startswith("/save "):
-            transformer.save(text[6:])
-            print("Model saved to", text[6:])
+            path = text[6:]
+            transformer.save(path)
+            print("Model saved to", path)
             continue
+
         elif text == "/save":
             transformer.save()
             print("Model saved to model.json")
             continue
-        
+
+        elif text.startswith("/temperature"):
+            parts = text.split(" ", 1)
+            if len(parts) == 1:
+                print("Current temperature:", transformer.temperature)
+            else:
+                try:
+                    transformer.temperature = float(parts[1])
+                    print("Set temperature to", transformer.temperature)
+                except:
+                    print("Invalid temperature value.")
+            continue
+
+        elif text == "/exit":
+            print("Exiting interactive mode.")
+            break
+
+        # Generate output
         print("Input tokens:", [token[0] for token in transformer.tokenize(f"user:\n{text}\nyou:\n")])
         output = generate_response(text)
         print("Generated output:", output)
+
 except KeyboardInterrupt:
+    print("\nExiting interactive mode.")
     exit(0)
