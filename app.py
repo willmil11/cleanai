@@ -1,9 +1,36 @@
+#
+#* It is way better to download the better comments extension for vscode to view this file because
+#* it adds color to the comments depending on how much you should read them thanks to the little symbols
+#* like * ! and ? that I put after # on the comments.
+
+# Credits
+#
+# Me ofc (willmil11)
+# Claude
+# Chatgpt
+#
+
+# Contact me
+# Discord: willmil11
+# Email: willmil111012@gmail.com
+#
+
+#Drop a star on the github repo if you like it :D
+
+#? The code is not super clean and the print statements create super messy output but it is usable and works.
+#? It is also not very optimized as it is pure python running single threaded.
+#? And that's because this code isn't supposed to be extremely optimized and perfected, it is a proof of
+#? concept, a demonstration of an actual transformer implementation in pure python.
+#?
+#? You can however, still expect the code to get cleaner and more user friendly in future updates.
+
 from sys import exit
 import time
 import random as rd
 import math
 import uuid
 import json
+import sys
 
 try:
     import tiktoken
@@ -1959,33 +1986,57 @@ class Transformer:
 
         return optimizer
 
+#! Here I load my dataset that's not very important but it's just to tell you you have to load it yourself.
 try:
     dataset = json.loads(open("dataset.json", "r").read())
 except Exception:
     print("Failed to read dataset, exiting...")
     exit(1)
 
+#! Setting the flag to False will load the model at the path specified (default: model_adam.json)
+#! Setting the flag to True will train a new model based on an io json dataset (default: dataset.json)
+#! and one or multiple pre-training dataset(s) (default: pre-training1.txt and pre-training2.txt) 
 flag = False
 
 if flag:
     transformer = Transformer(True, {
-        "contextSize": 64,              
-        "embeddingSize": 32,            
-        "learningRate": 0.0005,           
-        "maxOutputSize": 16,            
-        "layersAmount": 2,              
+        "contextSize": 64, #? Self explanatory.
+        "embeddingSize": 32, #? If you raise this number the model will understand better how tokens relate to
+                             #? each other, but it will be heavier to run.    
+        "learningRate": 0.0005, #? You can try to tweak this but this is generally a good value for the adam
+                                #? optimizer, higher will make the model learn faster but it may overshoot the
+                                #? optimal values and learn worse as a result. Lower will make the model learn
+                                #? slower but it will be more precise which will result in a better model.
+        "maxOutputSize": 16, #? Self explanatory.
+        "layersAmount": 2, #? The model will be deeper and therefore have deeper understanding if you make.
+                           #? make this higher but it will be heavier to run.
         "heads": 2,                     
-        "use_he_init": True,            # Add this to use He initialization
-        "biasesinitrange": [-0.01, 0.01],
-        "embeddinginitrange": [-0.1, 0.1],
-        "dataset": dataset
+        "use_he_init": True, #? He initialization is enabled by default here, you can disable it for purely
+                             #? random init but I don't recommand it.
+        "biasesinitrange": [-0.01, 0.01], #? You can try to tweak this if you want but this is generally a
+                                          #? good range for biases.
+        "embeddinginitrange": [-0.1, 0.1], #? Same here.
+        "dataset": dataset #! Put the dataset you loaded here.
     })
 
-    # Start training with SGD + Momentum
-    transformer.train(1000, optimizer="adam")
+    #! The epoch count is intentionally set absurdly high here (1000) because the interactive mode lets you
+    #! test the model while it's pre-training or training, save your progress, stop the process,
+    #! or even switch optimizers on the fly. If you stop pre-training, it'll jump straight to
+    #! training, and if you stop training, you'll land in the final interactive console where
+    #! you can test your model and/or save it before exiting.
+    transformer.pretrain(["pre-training1.txt", "pre-training2.txt"], epochs=1000, optimizer="adam") #! Put your pre-training files paths here.
+                                                                                                    #? You can change the optimizer to either sgd or
+                                                                                                    #? sgd_momentum but they are generally slower and
+                                                                                                    #? get stuck more easily than adam. I recommand
+                                                                                                    #? keeping adam.
+    transformer.train(1000, optimizer="adam") #? Same here for the optimizer.
 else:
     transformer = Transformer(new=False, path="model_adam.json", parameters={
-        "dataset": dataset
+        "dataset": dataset #! You still need to specify the dataset even when loading a model, because
+                           #! the way I built this is that you can call .train() without specifying the
+                           #! dataset in it because it is in the model object even tough it isn't saved in
+                           #! the model file which is why you need to specify it again.
+                           #? This issue does not exist for pre-training because I built it afterwards.
     })
 
 try:
@@ -2023,6 +2074,13 @@ try:
                     print("Set temperature to", transformer.temperature)
                 except:
                     print("Invalid temperature value.")
+            continue
+        
+        elif text == "/help":
+            print("Available commands:")
+            print("  /save [path]     Save model to file")
+            print("  /temperature X   Set or view temperature")
+            print("  /exit            Exit interactive mode")
             continue
 
         elif text == "/exit":
