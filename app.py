@@ -1326,6 +1326,153 @@ class Transformer:
         
         print(f"\n{'='*40}\nTraining completed after {len(epoch_losses)} epochs\nFinal loss: {epoch_losses[-1]:.6f}\nBest loss: {best_loss:.6f}\n{'='*40}\n")
         return best_loss
+
+    def pretrain(self, text_files, epochs=1, optimizer="sgd"):
+        """
+        Pretrain the model using raw text files, training on next-token prediction.
+
+        Args:
+            text_files: List of file paths (strings) to use for pretraining.
+            epochs: Number of passes over the dataset
+            optimizer: Optimizer to use - "sgd", "sgd_momentum", or "adam"
+        """
+        print(f"\n{'='*40}\nStarting pretraining with {optimizer} optimizer\n{'='*40}\n")
+
+        if optimizer not in ["sgd", "sgd_momentum", "adam"]:
+            print(f"Unknown optimizer: {optimizer}, falling back to SGD")
+            optimizer = "sgd"
+
+        best_loss = float('inf')
+        last_saved_sweet_spot_loss = float('inf')
+        sweet_spot_min = 0.0
+        sweet_spot_max = 5.0
+
+        plateau_patience = 5
+        plateau_counter = 0
+        loss_window_size = 10
+        last_best_loss = float('inf')
+        loss_history = []
+
+        max_tokens_per_file = 10_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000
+
+        for epoch in range(epochs):
+            print("\n" + "-"*60)
+            print(f"Epoch {epoch + 1}/{epochs}")
+            print("-"*60 + "\n")
+
+            context = []
+            epoch_losses = []
+
+            file_states = []
+            for file_path in text_files:
+                file_states.append({
+                    "path": file_path,
+                    "loaded": False,
+                    "tokens": []
+                })
+
+            file_index = 0
+            token_index = 0
+
+            while file_index < len(file_states):
+                state = file_states[file_index]
+                if not state["loaded"]:
+                    try:
+                        with open(state["path"], "r", encoding="utf-8") as f:
+                            text = f.read()
+                        tokens = self.tokenize(text)
+                        state["tokens"] = tokens
+                        state["loaded"] = True
+                        print(f"[Info] Loaded and tokenized {state['path']} ({len(tokens)} tokens)")
+                    except Exception as e:
+                        print(f"[Error] Could not read {state['path']}: {e}")
+                        file_index += 1
+                        continue
+
+                tokens = state["tokens"]
+
+                while token_index < len(tokens) - 1:
+                    if context:
+                        input_tokens = context[:]
+                        target_token = tokens[token_index + 1]
+                        loss = self.train_step(input_tokens, target_token, optimizer=optimizer, training_mode=True)
+                        epoch_losses.append(loss)
+
+                        if (token_index + 1) % 25 == 0 or token_index + 1 == len(tokens) - 1:
+                            print(f"Progress in {state['path']}: {token_index + 1}/{len(tokens) - 1} | Loss: {loss:.4f}", flush=True)
+
+                    context.append(tokens[token_index])
+                    if len(context) > self.contextSize:
+                        context = context[1:]
+
+                    token_index += 1
+
+                file_index += 1
+                token_index = 0
+
+                for i in range(len(file_states)):
+                    if file_states[i]["loaded"]:
+                        oldest_position = file_index * max_tokens_per_file + token_index - self.contextSize
+                        file_end_position = i * max_tokens_per_file + len(file_states[i]["tokens"])
+
+                        if file_end_position < oldest_position:
+                            print(f"[Info] Unloading {file_states[i]['path']} from memory")
+                            file_states[i]["loaded"] = False
+                            file_states[i]["tokens"] = []
+
+            if epoch_losses:
+                avg_loss = sum(epoch_losses) / len(epoch_losses)
+                print(f"[Epoch {epoch + 1}] Average loss: {avg_loss:.6f}")
+
+                loss_history.append(avg_loss)
+                if len(loss_history) >= loss_window_size:
+                    avg_recent_loss = sum(loss_history[-loss_window_size:]) / loss_window_size
+                    print(f"Average loss over last {loss_window_size} epochs: {avg_recent_loss:.6f}")
+
+                    if best_loss == last_best_loss:
+                        plateau_counter += 1
+                        if plateau_counter >= plateau_patience:
+                            print(f"Warning: Pretraining appears to be plateauing for {plateau_counter} epochs")
+                    else:
+                        plateau_counter = 0
+                        last_best_loss = best_loss
+
+                in_sweet_spot = sweet_spot_min <= avg_loss <= sweet_spot_max
+                first_time = in_sweet_spot and last_saved_sweet_spot_loss == float('inf')
+                improved = in_sweet_spot and (last_saved_sweet_spot_loss - avg_loss >= 0.5)
+
+                if first_time or improved:
+                    loss_str = f"{avg_loss:.2f}"
+                    save_path = f"pretrained_{epoch+1}_{loss_str}_{optimizer}_sweetspot.json"
+
+                    if first_time:
+                        print("\n" + "-"*60)
+                        print("REACHED SWEET SPOT LOSS! Auto-saving model")
+                        print("-"*60 + "\n")
+                    else:
+                        print("\n" + "-"*60)
+                        print("SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model")
+                        print(f"Previous saved: {last_saved_sweet_spot_loss:.2f}, Current: {avg_loss:.2f}")
+                        print("-"*60 + "\n")
+
+                    try:
+                        self.save(save_path)
+                        print(f"Sweet spot model saved to {save_path}")
+                        last_saved_sweet_spot_loss = avg_loss
+                    except Exception as e:
+                        print(f"[Error] Could not save model: {e}")
+
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
+                    print(f"\n{'-'*60}\nNEW BEST LOSS: {best_loss:.6f}\n{'-'*60}\n")
+
+            result = self.interactive_test_loop(epoch, avg_loss if epoch_losses else 0.0, optimizer)
+            if result == "STOP_TRAINING":
+                break
+            else:
+                optimizer = result
+
+        print(f"\n{'='*40}\nPretraining complete\n{'='*40}\n")
     
     def inference(self, context, return_cache, training_mode=False):
         def scale_activation(vector, base_gamma=5.0):
