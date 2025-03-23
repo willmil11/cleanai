@@ -31,12 +31,16 @@ import math
 import uuid
 import json
 import sys
+import platform
 
 try:
     import tiktoken
 except Exception:
     print("Failed to import tiktoken for tokenization, do you wish to try to auto install it?")
-    print("Note: You need pip installed and it will be ran in --break-system-packages mode, I am not liable for any damages.")
+    if platform.system() == "Linux":
+        print("Note: You need pip installed and it will be ran in --break-system-packages mode, I am not liable for any damages.")
+    else:
+        print("Note: You need pip installed, and I am not liable for any damages.")
     while True:
         answer = input("Do you wish to continue? (y/n) ")
         if answer.lower() == "y":
@@ -44,7 +48,6 @@ except Exception:
             try:
                 print("Trying to install tiktoken using pip...")
                 try:
-                    import platform
                     if platform.system() == "Linux":
                         run(["pip", "install", "tiktoken", "--break-system-packages"], check=True)
                     else:
@@ -76,7 +79,10 @@ try:
     from inputimeout import inputimeout, TimeoutOccurred
 except Exception:
     print("Failed to import inputimeout for interactive mode, do you wish to try to auto install it?")
-    print("Note: You need pip installed and it will be ran in --break-system-packages mode, I am not liable for any damages.")
+    if platform.system() == "Linux":
+        print("Note: You need pip installed and it will be ran in --break-system-packages mode, I am not liable for any damages.")
+    else:
+        print("Note: You need pip installed, and I am not liable for any damages.")
     while True:
         answer = input("Do you wish to continue? (y/n) ")
         if answer.lower() == "y":
@@ -84,7 +90,6 @@ except Exception:
             try:
                 print("Trying to install inputimeout using pip...")
                 try:
-                    import platform
                     if platform.system() == "Linux":
                         run(["pip", "install", "inputimeout", "--break-system-packages"], check=True)
                     else:
