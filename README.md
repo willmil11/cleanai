@@ -1,6 +1,6 @@
 # Cleanai
 ## What is this?
-This is a project of mine that as of 23.03.2025 I've been working on for about 6 months. This is a transformer architecture with pre-training and training implemented in pure python. It only requires tiktoken and inputimeout for the interactive console mode as you can see in requirements.txt, not even numpy. Only pure raw python no abstractions. You can see the <a href="./quickstart.md">quickstart</a>
+This is a project of mine that as of 24.03.2025 I've been working on for about 6 months. This is a transformer architecture with pre-training and training implemented in pure python. It only requires tiktoken for tokenization and inputimeout for the interactive console mode as you can see in requirements.txt, not even numpy. Only pure raw python no abstractions. You can see the <a href="./quickstart.md">quickstart</a>
 
 ## Why?
 I wanted to see how this actually works therfore I decided to put Claude and Chatgpt to work to teach me how all of this works, I also used them to implement some parts of the code like training but I generally understand how it works now. Because this works and this is really cool I am releasing it on github publicly :)
@@ -24,24 +24,16 @@ are you?? how how how how are?? are you
 As you can see the response is not as good but it still kind of captures the pattern.
 
 ## What's gonna be in future updates?
-In future updates I'm gonna make the code way more user friendly and cleaner, perhaps allow for it to be a CLI tool so you can just do something like
-```bash
-python cleanai.py --new --train config.json
-```
-Or something like that.
-<br>
 I'm still not sure of that, but I may convert the code to javascript to be able to run it with nodejs which would make it MUCH faster.
-<br>
-I may even add an API to it so you can easily make an http request to run or train a model and track progress.
 
 ## How to support the project?
 To support this project you can star the repo and you can send me suggestions through discord (willmil11) or email (willmil111012@gmail.com). Please don't create pull requests as this is a project of mine to learn I therefore want to code and implement everything myself, even if your suggestions are welcome, I want to implement them myself.
 
 ## My model keeps overfiting, what do I do?
-That's completely normal, for testing purposes I disabled dropout and some other stuff to make the model overfit on purpose, In future updates I'll make it more user friendly to enable/disable this but rn you can just search for "overfiting" by hitting ctrl + f and typing "overfiting" and you'll find red comments or if you don't have the better comments extension, comments starting with "#!" that explain what needs to be done to re-enable anti-overfiting optimizations.
+I suggest enabling anti overfitting optimisations in the config of your model or tinkering with the actual code (you can search where overfitting optimisations are applied by hitting ctrl + f and search "overfiting").
 
 ## Why is it saying "Extreme scaling"?
-So sometimes numbers get too big, and we're at risk of them being so big that python will crash and turn them into nans while trying to represent them which is bad because it'll destroy all of the calculations where those numbers that turned into nans were supposed to be used. So we scale those numbers down to keep precision without risking nans.
+So sometimes numbers get too big, and we're at risk of them being so big that python will crash and turn them into nans while trying to represent them which is bad because it'll destroy all of the calculations where those numbers that turned into nans were supposed to be used. So we scale those numbers down to keep precision without risking nans. If you don't like to see that just don't use the --verbose flag.
 
 ## Who am I and what does this project mean to me?
 I'm William, a 14 yo french programmer and this is my most ambitious project yet. It took an insane amount of planning, coding and debugging but it was sooo worth it.

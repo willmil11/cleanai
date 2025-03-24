@@ -17,20 +17,327 @@
 
 #Drop a star on the github repo if you like it :D
 
-#? The code is not super clean and the print statements create super messy output but it is usable and works.
-#? It is also not very optimized as it is pure python running single threaded.
-#? And that's because this code isn't supposed to be extremely optimized and perfected, it is a proof of
-#? concept, a demonstration of an actual transformer implementation in pure python.
-#?
-#? You can however, still expect the code to get cleaner and more user friendly in future updates.
+#? The code is not super clean and optimised but it's prety user friendly and easy to understand,
+#? it works well too. You can expect it to get better in future updates
+
+import sys
+import os
+import json
+
+args = sys.argv[1:]
+
+config = {}
+
+def help(issue="No args found."):
+    def spacing():
+        return " " * len("python " + sys.argv[0])
+    print("=====" + "=" * len(issue) + "=====")
+    print("==== " + issue + " ====")
+    print("=====" + "=" * len(issue) + "=====")
+    print("")
+    print("python " + sys.argv[0] + " --new")
+    print(spacing() + " " * len(" --new") + "--config path/to/config.json")
+    print(spacing() + " " * len(" --new") + " " * len("--config path/to/config.json") + "--train")
+    print(spacing() + " " * len(" --new") + " " * len("--config path/to/config.json") + " " * len("--pretrain") + "--pretrain")
+    print(spacing() + " " * len(" --new") + " " * len("--config path/to/config.json") + "--pretrain")
+    print(spacing() + " " * len(" --new") + " " * len("--config path/to/config.json") + " " * len("--pretrain") + "--train")
+    print(spacing() + " " * len(" --new") + "--config path/to/config.json --verbose")
+    print(spacing() + " " * len(" --new") + " " * len("--config path/to/config.json --verbose") + "--train")
+    print(spacing() + " " * len(" --new") + " " * len("--config path/to/config.json --verbose") + " " * len("--pretrain") + "--pretrain")
+    print(spacing() + " " * len(" --new") + " " * len("--config path/to/config.json --verbose") + "--pretrain")
+    print(spacing() + " " * len(" --new") + " " * len("--config path/to/config.json --verbose") + " " * len("--pretrain") + "--train")
+    print(spacing() + " --load path/to/model.json")
+    print("")
+
+flag = None
+VERBOSE = False
+training__ = None
+pretraining__ = None
+config__ = False
+skipnext = False
+config_location = None
+model_location = None
+
+if len(args) == 0:
+    help()
+    exit(0)
+else:
+    for i, arg in enumerate(args):
+        if skipnext:
+            skipnext = False
+            continue
+        if arg == "--new":
+            if flag == True:
+                help("You can't specify --new multiple times.")
+                exit(0)
+            else:
+                if flag == False:
+                    help("You can't specify --new and --load at the same time.")
+                    exit(0)
+            flag = True
+        else:
+            if arg == "--load":
+                if flag == True:
+                    help("You can't specify --new and --load at the same time.")
+                    exit(0)
+                else:
+                    if flag == False:
+                        help("You can't specify --load multiple times.")
+                        exit(0)
+                flag = False
+                try:
+                    if args[i + 1] != "--new":
+                        if args[i + 1] != "--train":
+                            if args[i + 1] != "--pretrain":
+                                if args[i + 1] != "--config":
+                                    model_location = args[i + 1]
+                                    if not os.path.exists(model_location):
+                                        help(f"Model file {model_location} does not exist.")
+                                        exit(0)
+                                    if not os.path.isfile(model_location):
+                                        help(f"Model file {model_location} is not a file.")
+                                        exit(0)
+                                    if not model_location.endswith(".json"):
+                                        help(f"Model file {model_location} is not a json file.")
+                                        exit(0)
+                                else:
+                                    help("You need to specify a model file after --load.")
+                                    exit(0)
+                            else:
+                                help("You need to specify a model file after --load.")
+                                exit(0)
+                        else:
+                            help("You need to specify a model file after --load.")
+                            exit(0)
+                    else:
+                        help("You need to specify a model file after --load.")
+                        exit(0)
+                except IndexError:
+                    help("You need to specify a model file after --load.")
+                    exit(0)
+            else:
+                if arg == "--verbose":
+                    if VERBOSE == True:
+                        help("You can't specify --verbose multiple times.")
+                        exit(0)
+                    else:
+                        VERBOSE = True
+                else:
+                    if arg == "--train":
+                        if training__ == True:
+                            help("You can't specify --train multiple times.")
+                            exit(0)
+                        else:
+                            training__ = True
+                    else:
+                        if arg == "--pretrain":
+                            if pretraining__ == True:
+                                help("You can't specify --pretrain multiple times.")
+                                exit(0)
+                            else:
+                                pretraining__ = True
+                        else:
+                            if arg == "--config":
+                                if config__ == True:
+                                    help("You can't specify --config multiple times.")
+                                    exit(0)
+                                config__ = True
+                                try:
+                                    if args[i + 1] != "--new":
+                                        if args[i + 1] != "--train":
+                                            if args[i + 1] != "--pretrain":
+                                                if args[i + 1] != "--config":
+                                                    config_location = args[i + 1]
+                                                    if not os.path.exists(config_location):
+                                                        help(f"Config file {config_location} does not exist.")
+                                                        exit(0)
+                                                    if not os.path.isfile(config_location):
+                                                        help(f"Config file {config_location} is not a file.")
+                                                        exit(0)
+                                                    if not config_location.endswith(".json"):
+                                                        help(f"Config file {config_location} is not a json file.")
+                                                        exit(0)
+                                                else:
+                                                    help("You need to specify a config file after --config.")
+                                                    exit(0)
+                                            else:
+                                                help("You need to specify a config file after --config.")
+                                                exit(0)
+                                        else:
+                                            help("You need to specify a config file after --config.")
+                                            exit(0)
+                                    else:
+                                        help("You need to specify a config file after --config.")
+                                        exit(0)
+                                except IndexError:
+                                    help("You need to specify a config file after --config.")
+                                    exit(0)
+                                skipnext = True
+                                continue
+                            else:
+                                help(f"Argument {arg} not recognised.")
+                                exit(0)
+
+if "--new" in args:
+    if not "--config" in args:
+        help("You need to specify a config file with --config.")
+        exit(0)
+    else:
+        if not "--train" in args:
+            if not "--pretrain" in args:
+                help("You need to specify either --train or --pretrain or both with --new.")
+                exit(0)
+        else:
+            if not "--pretrain" in args:
+                if not "--train" in args:
+                    help("You need to specify either --train or --pretrain or both with --new.")
+                    exit(0)
+
+# Check if either --new or --load is specified
+if not "--new" in args and not "--load" in args:
+    help("You need to specify either --new or --load.")
+    exit(0)
+
+if not VERBOSE:
+    VERBOSE = False
+
+print("Arguments parsed successfully.")
+if "--new" in args:
+    print("Reading and loading config file...")
+    try:
+        configtoparse = open(config_location, "r").read()
+    except Exception as error:
+        print("Failed to read config file, check if it's corrupted or if you don't have permissions.")
+        print("Python error:")
+        print(str(error))
+        print("Exiting...")
+        exit(1)
+
+    try:
+        configtoparse = json.loads(configtoparse)
+    except Exception as error:
+        print("Failed to load json of config file, check if it's corrupted.")
+        print("Python error:")
+        print(str(error))
+        print("Exiting...")
+        exit(1)
+
+    keys = ["pre-training-paths", "training-dataset-path", "contextSize", "embeddingSize", "learningRate", "maxOutputSize", "layersAmount", "heads", "biasesinitrange", "embeddinginitrange"]
+
+    for key in keys:
+        if key in ["pre-training-paths", "training-dataset-path"]:
+            if pretraining__ == None and training__ == None:
+                print(f"Config file missing parameter {key}, add it.")
+                print("Exiting...")
+                exit(1)
+        else:
+            if not key in configtoparse:
+                print(f"Config file missing parameter {key}, add it.")
+                print("Exiting...")
+                exit(1)
+            else:
+                if pretraining__:
+                    if key == "pre-training-paths":
+                        if not isinstance(configtoparse[key], list):
+                            print(f"Config file parameter {key} must be an array of strings, not a {type(configtoparse[key])}")
+                            exit(1)
+                        for item in configtoparse[key]:
+                            if not isinstance(item, str):
+                                 print(f"Config file parameter {key} must be an array of strings, not an array of {type(item)}")
+                                 exit(1)
+                if training__:
+                    if key == "training-dataset-path":
+                        if not isinstance(configtoparse[key], str):
+                            print(f"Config file parameter {key} must be a string, not a {type(configtoparse[key])}")
+                            exit(1)
+                if key == "contextSize":
+                    if not isinstance(configtoparse[key], int):
+                        print(f"Config file parameter {key} must be an int, not a {type(configtoparse[key])}")
+                        exit(1)
+                if key == "embeddingSize":
+                    if not isinstance(configtoparse[key], int):
+                        print(f"Config file parameter {key} must be an int, not a {type(configtoparse[key])}")
+                        exit(1)
+                if key == "learningRate":
+                    if not isinstance(configtoparse[key], float):
+                        print(f"Config file parameter {key} must be a float, not a {type(configtoparse[key])}")
+                        exit(1)
+                if key == "maxOutputSize":
+                    if not isinstance(configtoparse[key], int):
+                        print(f"Config file parameter {key} must be an int, not a {type(configtoparse[key])}")
+                        exit(1)
+                if key == "layersAmount":
+                    if not isinstance(configtoparse[key], int):
+                        print(f"Config file parameter {key} must be an int, not a {type(configtoparse[key])}")
+                        exit(1)
+                if key == "heads":
+                    if not isinstance(configtoparse[key], int):
+                        print(f"Config file parameter {key} must be an int, not a {type(configtoparse[key])}")
+                        exit(1)
+                if key == "biasesinitrange":
+                    if not isinstance(configtoparse[key], list):
+                        print(f"Config file parameter {key} must be an array of two floats, not a {type(configtoparse[key])}")
+                        exit(1)
+                    if len(configtoparse[key]) != 2:
+                        print(f"Config file parameter {key} must be an array of two floats, not an array of {len(configtoparse[key])} floats")
+                        exit(1)
+                    for item in configtoparse[key]:
+                        if not isinstance(item, float):
+                             print(f"Config file parameter {key} must be an array of two floats, not an array of {type(item)}")
+                             exit(1)
+                if key == "embeddinginitrange":
+                    if not isinstance(configtoparse[key], list):
+                        print(f"Config file parameter {key} must be an array of two floats, not a {type(configtoparse[key])}")
+                        exit(1)
+                    if len(configtoparse[key]) != 2:
+                        print(f"Config file parameter {key} must be an array of two floats, not an array of {len(configtoparse[key])} floats")
+                        exit(1)
+                    for item in configtoparse[key]:
+                        if not isinstance(item, float):
+                             print(f"Config file parameter {key} must be an array of two floats, not an array of {type(item)}")
+                             exit(1)
+                if pretraining__:
+                    if key == "pre-train-epochs":
+                        if not isinstance(configtoparse[key], int):
+                            print(f"Config file parameter {key} must be an int, not a {type(configtoparse[key])}")
+                            exit(1)
+                if training__:
+                    if key == "train-epochs":
+                        if not isinstance(configtoparse[key], int):
+                            print(f"Config file parameter {key} must be an int, not a {type(configtoparse[key])}")
+                            exit(1)
+                if pretraining__:
+                    if key == "pre-train-optimizer":
+                        if not isinstance(configtoparse[key], str):
+                            print(f"Config file parameter {key} must be a string, not a {type(configtoparse[key])}")
+                            exit(1)
+                if training__:
+                    if key == "train-optimizer":
+                        if not isinstance(configtoparse[key], str):
+                            print(f"Config file parameter {key} must be a string, not a {type(configtoparse[key])}")
+                            exit(1)
+                if key == "antiOverfittingOptimisations":
+                    if not isinstance(configtoparse[key], bool):
+                        print(f"Config file parameter {key} must be a boolean, not a {type(configtoparse[key])}")
+                        exit(1)
+                config[key] = configtoparse[key]
+
+    config = configtoparse
+
+
+    print("Config file loaded successfully.")
+
+ndprint = print
+print = None
+def print(*args, sep=' ', end='\n', file=None, flush=False):
+    if VERBOSE:
+        ndprint(*args, sep=sep, end=end, file=file, flush=flush)
 
 from sys import exit
 import time
 import random as rd
 import math
 import uuid
-import json
-import sys
 import platform
 
 try:
@@ -150,19 +457,20 @@ class Transformer:
            'epsilon': 1e-9,
            't': 0
        }
-       print("Trying to read vocabulary file...")
+       ndprint("Trying to read vocabulary file...")
        try:
            self.vocab = json.loads(open("vocabulary.json", "r").read())
        except Exception:
            print("Failed to read vocabulary file, creating error...")
            raise Exception("Failed to read vocabulary file")
-       print("Successfully read vocabulary file")
+       ndprint("Successfully read vocabulary file")
 
        self.encoder = tiktoken.get_encoding("cl100k_base")  # Same as GPT-4
        self.temperature = 0.7
 
        if new:
-           print("Initializing model...")
+           ndprint("Initializing model...")
+           sgtimer = timer_()
            print("Initializing parameters...")
            timer = timer_()
            self.contextSize = parameters["contextSize"]
@@ -177,7 +485,6 @@ class Transformer:
                self.weightsinitrange = parameters["weightsinitrange"]
            self.biasesinitrange = parameters["biasesinitrange"]
            self.heads = parameters["heads"]
-           self.dataset = parameters["dataset"]
            self.embeddinginitrange = parameters["embeddinginitrange"]
            self.transformer = {}
            self.step_num = 0
@@ -294,94 +601,10 @@ class Transformer:
            for i in range(len(self.vocab)):
                self.transformer["vocab_projection"]["biases"].append([random(self.biasesinitrange), 0, 0])
            print("Initialized vocabulary projection weights and biases in", timer_end(timer), "ms")
-
-           timer = timer_()
-           print("Contextizing dataset...")
-           timer = timer_()
-           self.contexted_dataset = []
-           self.response_token_masks = []  # For tracking which tokens are response tokens
-   
-           # Find end token
-           end_token = None
-           for token in self.vocab:
-               if token[1] == 100257:
-                   end_token = token[0]
-                   break
-   
-           for item in self.dataset:
-               # Get all input/output pairs from the item
-               user_inputs = item["inputs"]
-               assistant_outputs = item["outputs"]
-               
-               # Make sure both lists have the same length
-               if len(user_inputs) != len(assistant_outputs):
-                   print(f"Warning: inputs and outputs counts don't match in item")
-                   continue
-               
-               # Full context string for this item
-               full_context = ""
-               # Mask to track which tokens are part of assistant responses (for training)
-               token_mask = []
-               
-               # Process each conversation turn
-               for i, (user_text, assistant_text) in enumerate(zip(user_inputs, assistant_outputs)):
-                   # Format user part
-                   user_part = f"user:\n{user_text}\n"
-                   user_tokens = self.tokenize(user_part)
-                   full_context += user_part
-                   # We don't train on predicting user tokens
-                   token_mask.extend([False] * len(user_tokens))
-                   
-                   # Format system marker and assistant part
-                   system_marker = "you:\n"
-                   system_tokens = self.tokenize(system_marker)
-                   full_context += system_marker
-                   # We don't train on predicting system marker tokens
-                   token_mask.extend([False] * len(system_tokens))
-                   
-                   # Add assistant response with end token
-                   assistant_part = assistant_text + end_token
-                   assistant_tokens = self.tokenize(assistant_part)
-                   full_context += assistant_part
-                   # We train on predicting ALL assistant tokens INCLUDING the end token
-                   token_mask.extend([True] * len(assistant_tokens))
-                   
-                   # Only add a newline after the assistant response if it's not the last turn
-                   if i < len(user_inputs) - 1:
-                       full_context += "\n"
-                       # We don't train on predicting newline tokens
-                       token_mask.extend([False])
-               
-               # Add the fully formatted conversation to the dataset
-               self.contexted_dataset.append(full_context)
-               self.response_token_masks.append(token_mask)
-                       
-           print("Contextized dataset in", timer_end(timer), "ms")
-
-           print("Tokenizing contexted dataset...")
-           timer = timer_()
-           self.tokenized_dataset = []
-           for i, item in enumerate(self.contexted_dataset):
-               self.tokenized_dataset.append(self.tokenize(item))
-               
-               # Verify that our masks match the expected token count
-               expected_tokens = len(self.tokenized_dataset[-1]) - 1  # -1 because we predict next tokens
-               if len(self.response_token_masks[i]) != expected_tokens:
-                   print(f"Warning: Token mask length mismatch for item {i}.")
-                   print(f"  Expected {expected_tokens} mask entries but got {len(self.response_token_masks[i])}")
-                   
-                   # Adjust the mask if needed to avoid errors
-                   if len(self.response_token_masks[i]) < expected_tokens:
-                       # Extend with False (don't train on extra tokens)
-                       self.response_token_masks[i].extend([False] * (expected_tokens - len(self.response_token_masks[i])))
-                   else:
-                       # Truncate if too long
-                       self.response_token_masks[i] = self.response_token_masks[i][:expected_tokens]
-                   
-           print("Tokenized contexted dataset in", timer_end(timer), "ms")
-           print("Successfully initialized model")
+           ndprint("Successfully initialized model in", timer_end(sgtimer), "ms")
        else:
-           print("Reading model from file...")
+           ndprint("Reading model from file...")
+           timer = timer_()
            try:
                model = json.loads(open(path, "r").read())  # If using read()
                self.transformer = model["transformer"]
@@ -393,13 +616,6 @@ class Transformer:
                self.weightsinitrange = model["weightsinitrange"]
                self.biasesinitrange = model["biasesinitrange"]
                self.heads = model["heads"]
-               if "dataset" in model:
-                   self.dataset = model["dataset"]
-               elif parameters and "dataset" in parameters:
-                  print("Dataset not found in model file, using provided dataset")
-                  self.dataset = parameters["dataset"]
-               else:
-                  raise Exception("No dataset found in model or parameters")
                self.embeddinginitrange = model["embeddinginitrange"]
                
                # Add this block to load Adam parameters
@@ -421,7 +637,7 @@ class Transformer:
            except Exception:
                print("Failed to read model file, creating error...")
                raise Exception("Failed to read model file")
-           print("Successfully read model from file")
+           ndprint("Successfully read model from file in", timer_end(timer), "ms")
 
     def he_init(self, fan_in):
         """
@@ -590,7 +806,7 @@ class Transformer:
             }
             transformer["step_num"] = self.step_num
             json.dump(transformer, file)
-        print("Model saved to", path)
+        ndprint("Model saved to", path)
 
     def calculate_loss(self, predicted_scores, target_token_id):
         # Convert scores to probabilities using softmax
@@ -599,6 +815,9 @@ class Transformer:
         # Create smoothed target distribution
         #! Set to 0 for better overfiting, for actual training set epsilon to 0.1 again.
         epsilon = 0 #Changed from 0.1 to 0 for better overfitting
+        if config["antiOverfittingOptimisations"]:
+            epsilon = 0.1
+            
         vocab_size = len(self.vocab)
         target_distribution = [(epsilon / (vocab_size - 1)) for _ in range(vocab_size)]
         
@@ -651,7 +870,7 @@ class Transformer:
         return [0, 0, 0]
 
     def train_step(self, input_tokens, target_token, optimizer="sgd", training_mode=True):
-        print("Starting training step...")
+        ndprint("Starting training step...")
         gtimer = timer_()
         
         # Helper function to compute global gradient norm
@@ -939,7 +1158,9 @@ class Transformer:
         # Weight decay parameter
         #! Set to 0 for better overfiting, set to 1e-5 or bigger for actual training.
         weight_decay = 0  # L2 regularization factor, changed from 1e-5 to 0 for faster overfitting
-
+        if config["antiOverfittingOptimisations"]:
+            weight_decay = 1e-5
+        
         # For SGD with momentum
         momentum_factor = 0.5  # Classic momentum value
         if optimizer == "sgd_momentum" and not hasattr(self, 'momentum_initialized'):
@@ -1158,7 +1379,7 @@ class Transformer:
             print(f"Sample momentum value: {param_to_check[1]}")
         else:
             print("Using SGD - no momentum/velocity values to report")
-        print("Training step completed in", timer_end(gtimer), "ms")
+        ndprint("Training step completed in", timer_end(gtimer), "ms")
         return initial_loss
     
     def check_adam_state(self):
@@ -1175,7 +1396,7 @@ class Transformer:
         for i, param in enumerate(params):
             print(f"Parameter {i}: value={param[0]}, momentum={param[1]}, velocity={param[2]}")
     
-    def train(self, epochs=1, optimizer="sgd"):
+    def train(self, dataset, epochs=1, optimizer="sgd"):
         """
         Train the model for the specified number of epochs using the specified optimizer.
         
@@ -1183,20 +1404,107 @@ class Transformer:
             epochs: Number of epochs to train for
             optimizer: Which optimizer to use - "sgd", "sgd_momentum", or "adam"
         """
+        subtimer = timer_()
+        ndprint("Preprocessing dataset...")
+        print("Contextizing dataset...")
+        timer = timer_()
+        contexted_dataset = []
+        response_token_masks = []  # For tracking which tokens are response tokens
+
+        # Find end token
+        end_token = None
+        for token in self.vocab:
+            if token[1] == 100257:
+                end_token = token[0]
+                break
+
+        for item in dataset:
+            # Get all input/output pairs from the item
+            user_inputs = item["inputs"]
+            assistant_outputs = item["outputs"]
+            
+            # Make sure both lists have the same length
+            if len(user_inputs) != len(assistant_outputs):
+                print(f"Warning: inputs and outputs counts don't match in item")
+                continue
+            
+            # Full context string for this item
+            full_context = ""
+            # Mask to track which tokens are part of assistant responses (for training)
+            token_mask = []
+            
+            # Process each conversation turn
+            for i, (user_text, assistant_text) in enumerate(zip(user_inputs, assistant_outputs)):
+                # Format user part
+                user_part = f"user:\n{user_text}\n"
+                user_tokens = self.tokenize(user_part)
+                full_context += user_part
+                # We don't train on predicting user tokens
+                token_mask.extend([False] * len(user_tokens))
+                
+                # Format system marker and assistant part
+                system_marker = "you:\n"
+                system_tokens = self.tokenize(system_marker)
+                full_context += system_marker
+                # We don't train on predicting system marker tokens
+                token_mask.extend([False] * len(system_tokens))
+                
+                # Add assistant response with end token
+                assistant_part = assistant_text + end_token
+                assistant_tokens = self.tokenize(assistant_part)
+                full_context += assistant_part
+                # We train on predicting ALL assistant tokens INCLUDING the end token
+                token_mask.extend([True] * len(assistant_tokens))
+                
+                # Only add a newline after the assistant response if it's not the last turn
+                if i < len(user_inputs) - 1:
+                    full_context += "\n"
+                    # We don't train on predicting newline tokens
+                    token_mask.extend([False])
+            
+            # Add the fully formatted conversation to the dataset
+            contexted_dataset.append(full_context)
+            response_token_masks.append(token_mask)
+                    
+        print("Contextized dataset in", timer_end(timer), "ms")
+
+        print("Tokenizing contexted dataset...")
+        timer = timer_()
+        tokenized_dataset = []
+        for i, item in enumerate(contexted_dataset):
+            tokenized_dataset.append(self.tokenize(item))
+            
+            # Verify that our masks match the expected token count
+            expected_tokens = len(tokenized_dataset[-1]) - 1  # -1 because we predict next tokens
+            if len(response_token_masks[i]) != expected_tokens:
+                print(f"Warning: Token mask length mismatch for item {i}.")
+                print(f"  Expected {expected_tokens} mask entries but got {len(response_token_masks[i])}")
+                
+                # Adjust the mask if needed to avoid errors
+                if len(response_token_masks[i]) < expected_tokens:
+                    # Extend with False (don't train on extra tokens)
+                    response_token_masks[i].extend([False] * (expected_tokens - len(response_token_masks[i])))
+                else:
+                    # Truncate if too long
+                    response_token_masks[i] = response_token_masks[i][:expected_tokens]
+                
+        print("Tokenized contexted dataset in", timer_end(timer), "ms")
+        ndprint("Preprocessed dataset in " + timer_end(subtimer) + "ms")
         import threading
         import time
         
         if optimizer not in ["sgd", "sgd_momentum", "adam"]:
-            print(f"Unknown optimizer: {optimizer}, falling back to SGD")
+            ndprint(f"Unknown optimizer: {optimizer}, falling back to SGD")
             optimizer = "sgd"
         
-        print(f"\n{'='*40}\nStarting training with {optimizer} optimizer\n{'='*40}\n")
+        ndprint(f"\n{'='*40}\nStarting training with {optimizer} optimizer\n{'='*40}\n")
+        sgtimer = timer_()
         
         # Initialize loss tracking
         best_loss = float('inf')
         epoch_losses = []
         continue_training = True
-        self.loss_history = []
+        loss_history = []
         loss_window_size = 10
         
         # For detecting plateaus
@@ -1205,39 +1513,39 @@ class Transformer:
         last_best_loss = float('inf')
         
         # Define sweet spot range
-        sweet_spot_min = 2.0
+        sweet_spot_min = 0
         sweet_spot_max = 5.0
         last_saved_sweet_spot_loss = float('inf')  # Track last saved loss
         
         for epoch in range(epochs):
             if not continue_training:
-                print(f"Training stopped at epoch {epoch}/{epochs}")
+                ndprint(f"Training stopped at epoch {epoch}/{epochs}")
                 break
             
             # Add the separator for each epoch
-            print("\n" + "-"*60)
-            print(f"Epoch {epoch + 1}/{epochs}")
-            print("-"*60 + "\n")
+            ndprint("\n" + "-"*60)
+            ndprint(f"Epoch {epoch + 1}/{epochs}")
+            ndprint("-"*60 + "\n")
                 
             # Calculate total IO pairs in the dataset (only response tokens)
             total_io_pairs = 0
-            for i, tokens in enumerate(self.tokenized_dataset):
-                token_mask = self.response_token_masks[i]
+            for i, tokens in enumerate(tokenized_dataset):
+                token_mask = response_token_masks[i]
                 total_io_pairs += sum(token_mask)
             
             processed_io_pairs = 0
 
             timer = timer_()
-            print("Starting epoch", epoch + 1)
+            ndprint("Starting epoch", epoch + 1)
 
             # Track losses for this epoch
             batch_losses = []
 
-            for i in range(len(self.tokenized_dataset)):
+            for i in range(len(tokenized_dataset)):
                 stimer = timer_()
-                print("Training on item", i + 1, "/", len(self.tokenized_dataset))
-                tokens = self.tokenized_dataset[i]
-                token_mask = self.response_token_masks[i]
+                print("Training on item", i + 1, "/", len(tokenized_dataset))
+                tokens = tokenized_dataset[i]
+                token_mask = response_token_masks[i]
                 
                 # Track dataset loss for the current item
                 dataset_total_loss = 0.0
@@ -1268,7 +1576,7 @@ class Transformer:
                         # Compute overall progress across all IO pairs in the dataset
                         overall_progress = (processed_io_pairs / total_io_pairs) * 100
                         
-                        print(f"Loss: {loss:.4f} (Response token {current_position_in_responses}/{response_tokens_in_item}) | " +
+                        ndprint(f"Loss: {loss:.4f} (Response token {current_position_in_responses}/{response_tokens_in_item}) | " +
                               f"Current item progress: {current_item_progress:.2f}% | " +
                               f"Overall progress: {overall_progress:.2f}%", flush=True)
                     else:
@@ -1283,27 +1591,27 @@ class Transformer:
                     # Calculate average loss for this dataset item
                     avg_item_loss = dataset_total_loss / sequence_positions
                     batch_losses.append(avg_item_loss)
-                    print(f"Average loss for item {i+1}: {avg_item_loss:.4f}")
+                    ndprint(f"Average loss for item {i+1}: {avg_item_loss:.4f}")
                     
-                print("Trained on item", i + 1, "in", timer_end(stimer), "ms")
+                ndprint("Trained on item", i + 1, "in", timer_end(stimer), "ms")
                 
             # Calculate epoch average loss
             if len(batch_losses) > 0:  # Check that we had some valid batches
                 avg_epoch_loss = sum(batch_losses) / len(batch_losses)
                 epoch_losses.append(avg_epoch_loss)
-                self.loss_history.append(avg_epoch_loss)
-                print(f"Epoch {epoch + 1} average loss: {avg_epoch_loss:.6f}")
+                loss_history.append(avg_epoch_loss)
+                ndprint(f"Epoch {epoch + 1} average loss: {avg_epoch_loss:.6f}")
                 
                 # Check for plateaus
-                if len(self.loss_history) >= loss_window_size:
-                    avg_recent_loss = sum(self.loss_history[-loss_window_size:]) / loss_window_size
-                    print(f"Average loss over last {loss_window_size} epochs: {avg_recent_loss:.6f}")
+                if len(loss_history) >= loss_window_size:
+                    avg_recent_loss = sum(loss_history[-loss_window_size:]) / loss_window_size
+                    ndprint(f"Average loss over last {loss_window_size} epochs: {avg_recent_loss:.6f}")
                     
                     # Check for plateaus
                     if best_loss == last_best_loss:
                         plateau_counter += 1
                         if plateau_counter >= plateau_patience:
-                            print(f"Warning: Training appears to be plateauing for {plateau_counter} epochs")
+                            ndprint(f"Warning: Training appears to be plateauing for {plateau_counter} epochs")
                     else:
                         plateau_counter = 0
                         last_best_loss = best_loss
@@ -1322,36 +1630,36 @@ class Transformer:
                     save_path = f"model_{epoch+1}_{loss_str}_{optimizer}_sweetspot.json"
                     
                     if first_time_in_sweet_spot:
-                        print("\n" + "-"*60)
-                        print(f"REACHED SWEET SPOT LOSS! Auto-saving model")
-                        print("-"*60 + "\n")
+                        ndprint("\n" + "-"*60)
+                        ndprint(f"REACHED SWEET SPOT LOSS! Auto-saving model")
+                        ndprint("-"*60 + "\n")
                     else:
-                        print("\n" + "-"*60)
-                        print(f"SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model")
-                        print(f"Previous saved: {last_saved_sweet_spot_loss:.2f}, Current: {avg_epoch_loss:.2f}")
-                        print("-"*60 + "\n")
+                        ndprint("\n" + "-"*60)
+                        ndprint(f"SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model")
+                        ndprint(f"Previous saved: {last_saved_sweet_spot_loss:.2f}, Current: {avg_epoch_loss:.2f}")
+                        ndprint("-"*60 + "\n")
                     
                     try:
                         self.save(save_path)
-                        print(f"Sweet spot model saved to {save_path}")
+                        ndprint(f"Sweet spot model saved to {save_path}")
                         last_saved_sweet_spot_loss = avg_epoch_loss  # Update last saved loss
                     except Exception as e:
-                        print(f"Error saving sweet spot model: {e}")
+                        ndprint(f"Error saving sweet spot model: {e}")
                 
                 # Update best loss if needed
                 if is_best_loss:
                     # If best_loss isn't infinity, report the previous best loss
                     if best_loss != float('inf'):
-                        print("\n" + "-"*60)
-                        print(f"NEW BEST LOSS ACHIEVED! Previous best loss was: {best_loss:.6f}")
-                        print("-"*60 + "\n")
+                        ndprint("\n" + "-"*60)
+                        ndprint(f"NEW BEST LOSS ACHIEVED! Previous best loss was: {best_loss:.6f}")
+                        ndprint("-"*60 + "\n")
                     else:
-                        print("\n" + "-"*60)
-                        print("NEW BEST LOSS ACHIEVED!")
-                        print("-"*60 + "\n")
+                        ndprint("\n" + "-"*60)
+                        ndprint("NEW BEST LOSS ACHIEVED!")
+                        ndprint("-"*60 + "\n")
                     
                     best_loss = avg_epoch_loss  # Update best_loss
-                    print(f"New best loss: {best_loss:.6f}! Let's test the model:")
+                    ndprint(f"New best loss: {best_loss:.6f}! Let's test the model:")
                 
                 # Allow testing after each epoch completion (if not already prompting for best loss)
                 should_prompt = not is_best_loss  # Only prompt if we're not already prompting for best loss
@@ -1364,9 +1672,10 @@ class Transformer:
                     else:
                         optimizer = result
                     
-            print("Epoch", epoch + 1, "completed in", timer_end(timer), "ms")
+            ndprint("Epoch", epoch + 1, "completed in", timer_end(timer), "ms")
         
-        print(f"\n{'='*40}\nTraining completed after {len(epoch_losses)} epochs\nFinal loss: {epoch_losses[-1]:.6f}\nBest loss: {best_loss:.6f}\n{'='*40}\n")
+        ndprint(f"\n{'='*40}\nTraining completed after {len(epoch_losses)} epochs\nFinal loss: {epoch_losses[-1]:.6f}\nBest loss: {best_loss:.6f}\n{'='*40}\n")
+        ndprint("Time elapsed: " + timer_end(sgtimer) + "ms")
         return best_loss
 
     def pretrain(self, text_files, epochs=1, optimizer="sgd"):
@@ -1378,7 +1687,8 @@ class Transformer:
             epochs: Number of passes over the dataset
             optimizer: Optimizer to use - "sgd", "sgd_momentum", or "adam"
         """
-        print(f"\n{'='*40}\nStarting pretraining with {optimizer} optimizer\n{'='*40}\n")
+        ndprint(f"\n{'='*40}\nStarting pretraining with {optimizer} optimizer\n{'='*40}\n")
+        sgtimer = timer_()
 
         if optimizer not in ["sgd", "sgd_momentum", "adam"]:
             print(f"Unknown optimizer: {optimizer}, falling back to SGD")
@@ -1395,12 +1705,12 @@ class Transformer:
         last_best_loss = float('inf')
         loss_history = []
 
-        max_tokens_per_file = 10_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000
+        max_tokens_per_file = 10_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000_000
 
         for epoch in range(epochs):
-            print("\n" + "-"*60)
-            print(f"Epoch {epoch + 1}/{epochs}")
-            print("-"*60 + "\n")
+            ndprint("\n" + "-"*60)
+            ndprint(f"Epoch {epoch + 1}/{epochs}")
+            ndprint("-"*60 + "\n")
 
             context = []
             epoch_losses = []
@@ -1425,9 +1735,9 @@ class Transformer:
                         tokens = self.tokenize(text)
                         state["tokens"] = tokens
                         state["loaded"] = True
-                        print(f"[Info] Loaded and tokenized {state['path']} ({len(tokens)} tokens)")
+                        ndprint(f"[Info] Loaded and tokenized {state['path']} ({len(tokens)} tokens)")
                     except Exception as e:
-                        print(f"[Error] Could not read {state['path']}: {e}")
+                        ndprint(f"[Error] Could not read {state['path']}: {e}")
                         file_index += 1
                         continue
 
@@ -1441,7 +1751,7 @@ class Transformer:
                         epoch_losses.append(loss)
 
                         if (token_index + 1) % 25 == 0 or token_index + 1 == len(tokens) - 1:
-                            print(f"Progress in {state['path']}: {token_index + 1}/{len(tokens) - 1} | Loss: {loss:.4f}", flush=True)
+                            ndprint(f"Progress in {state['path']}: {token_index + 1}/{len(tokens) - 1} | Loss: {loss:.4f}", flush=True)
 
                     context.append(tokens[token_index])
                     if len(context) > self.contextSize:
@@ -1464,17 +1774,17 @@ class Transformer:
 
             if epoch_losses:
                 avg_loss = sum(epoch_losses) / len(epoch_losses)
-                print(f"[Epoch {epoch + 1}] Average loss: {avg_loss:.6f}")
+                ndprint(f"[Epoch {epoch + 1}] Average loss: {avg_loss:.6f}")
 
                 loss_history.append(avg_loss)
                 if len(loss_history) >= loss_window_size:
                     avg_recent_loss = sum(loss_history[-loss_window_size:]) / loss_window_size
-                    print(f"Average loss over last {loss_window_size} epochs: {avg_recent_loss:.6f}")
+                    ndprint(f"Average loss over last {loss_window_size} epochs: {avg_recent_loss:.6f}")
 
                     if best_loss == last_best_loss:
                         plateau_counter += 1
                         if plateau_counter >= plateau_patience:
-                            print(f"Warning: Pretraining appears to be plateauing for {plateau_counter} epochs")
+                            ndprint(f"Warning: Pretraining appears to be plateauing for {plateau_counter} epochs")
                     else:
                         plateau_counter = 0
                         last_best_loss = best_loss
@@ -1488,25 +1798,25 @@ class Transformer:
                     save_path = f"pretrained_{epoch+1}_{loss_str}_{optimizer}_sweetspot.json"
 
                     if first_time:
-                        print("\n" + "-"*60)
-                        print("REACHED SWEET SPOT LOSS! Auto-saving model")
-                        print("-"*60 + "\n")
+                        ndprint("\n" + "-"*60)
+                        ndprint("REACHED SWEET SPOT LOSS! Auto-saving model")
+                        ndprint("-"*60 + "\n")
                     else:
-                        print("\n" + "-"*60)
-                        print("SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model")
-                        print(f"Previous saved: {last_saved_sweet_spot_loss:.2f}, Current: {avg_loss:.2f}")
-                        print("-"*60 + "\n")
+                        ndprint("\n" + "-"*60)
+                        ndprint("SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model")
+                        ndprint(f"Previous saved: {last_saved_sweet_spot_loss:.2f}, Current: {avg_loss:.2f}")
+                        ndprint("-"*60 + "\n")
 
                     try:
                         self.save(save_path)
-                        print(f"Sweet spot model saved to {save_path}")
+                        ndprint(f"Sweet spot model saved to {save_path}")
                         last_saved_sweet_spot_loss = avg_loss
                     except Exception as e:
-                        print(f"[Error] Could not save model: {e}")
+                        ndprint(f"[Error] Could not save model: {e}")
 
                 if avg_loss < best_loss:
                     best_loss = avg_loss
-                    print(f"\n{'-'*60}\nNEW BEST LOSS: {best_loss:.6f}\n{'-'*60}\n")
+                    ndprint(f"\n{'-'*60}\nNEW BEST LOSS: {best_loss:.6f}\n{'-'*60}\n")
 
             result = self.interactive_test_loop(epoch, avg_loss if epoch_losses else 0.0, optimizer)
             if result == "STOP_TRAINING":
@@ -1514,16 +1824,28 @@ class Transformer:
             else:
                 optimizer = result
 
-        print(f"\n{'='*40}\nPretraining complete\n{'='*40}\n")
+        ndprint(f"\n{'='*40}\nPretraining complete\n{'='*40}\n")
+        ndprint("Time elapsed: " + timer_end(sgtimer) + "ms")
     
     def inference(self, context, return_cache, training_mode=False):
         def scale_activation(vector, base_gamma=5.0):
             global printdontprint
             """Dramatically more aggressive scaling for extreme values"""
             norm = math.sqrt(sum(x * x for x in vector))
-            if printdontprint:
-                print(f"Activation norm: {norm}")
-            printdontprint = not printdontprint
+            if math.isnan(norm):
+                ndprint("!!CRITICAL ISSUE!! -- Activation norm is NaN, this will cause training or generating responses to be extremely unstable or not work at all.")
+                ndprint("!!CRITICAL ISSUE!! -- Do you wish to exit? (In case you're training or pre-training, your model will not be saved but there's nothing you can do to save it now anyways. In case you're purely running a model, it is corrupted.)")
+                while True:
+                    result = input("Do you wish to exit? (y/n) ")
+                    if result.lower() == "y":
+                        ndprint("Exiting...")
+                        exit()
+                    else:
+                        if result.lower() == "n":
+                            ndprint("!!CRITICAL ISSUE!! -- Continuing despite NaN activation norm.")
+                            break
+                        else:
+                            ndprint("Invalid input. Please enter 'y' or 'n'.")
 
             if norm < 1e-10:  # Avoid division by zero
                 return vector
@@ -1544,6 +1866,9 @@ class Transformer:
                 # Standard tanh-based scaling for normal ranges
                 scaling_factor = math.tanh(norm / base_gamma) / (norm / base_gamma)
                 return [x * scaling_factor for x in vector]
+
+        ndprint("Doing inference...")
+        sgtimer = timer_()
 
         tokenized_input = self.tokenize(context)
         input_length = len(tokenized_input)
@@ -1736,6 +2061,9 @@ class Transformer:
             if training_mode:
                 #! Set to 0 for overfiting, for actual training, set this back to 0.1 or something like 0.2 (dropout 1)
                 dropout_rate = 0  # 10% dropout, changed to 0 because we wanna overfit
+                if config["antiOverfittingOptimisations"]:
+                    dropout_rate = 0.1
+                    
                 for i in range(len(combined_vectors)):
                     for j in range(len(combined_vectors[i])):
                         if random([0, 1]) < dropout_rate:
@@ -1792,6 +2120,9 @@ class Transformer:
             if training_mode:
                 #! Set to 0 for overfiting, for actual training, set this back to 0.1 or something like 0.2 (dropout 2)
                 dropout_rate = 0  # 0% dropout for overfitting
+                if config["antiOverfittingOptimisations"]:
+                    dropout_rate = 0.1
+
                 for i in range(len(bigger_vectors)):
                     for j in range(len(bigger_vectors[i])):
                         if random([0, 1]) < dropout_rate:
@@ -1857,6 +2188,7 @@ class Transformer:
                 next_token = token_idx
 
         print("Computed next token in", timer_end(timer), "ms")
+        ndprint("Did inference in", timer_end(sgtimer), "ms") 
 
         if return_cache:
             return [self.vocab[next_token][0], next_token], cache
@@ -1867,12 +2199,8 @@ class Transformer:
         current_context = context
         output = ""
         
-        print(f"Debug - Starting generation with context: '{context}'")
-        print(f"Debug - Using temperature: {temperature}")
-        
         for step in range(self.maxOutputSize):
             next_token, cache = self.inference(current_context, True)
-            print(f"Debug - Step {step}, inference returned token: {next_token}")
             
             # Get vocab scores
             scores = cache["vocab_scores"]
@@ -1882,15 +2210,6 @@ class Transformer:
                 highest_score = float('-inf')
                 next_token_idx = 0
                 
-                # Print top 5 scores for debugging
-                top_scores = [(i, scores[i]) for i in range(len(scores))]
-                top_scores.sort(key=lambda x: x[1], reverse=True)
-                print(f"Debug - Top 5 token scores:")
-                for i in range(min(5, len(top_scores))):
-                    idx, score = top_scores[i]
-                    token_info = self.vocab[idx]
-                    print(f"  {i+1}. Token '{token_info[0]}' (ID: {token_info[1]}): {score}")
-                
                 # Find highest scoring token
                 for i, score in enumerate(scores):
                     if score > highest_score:
@@ -1898,14 +2217,12 @@ class Transformer:
                         next_token_idx = i
                 
                 next_token = [self.vocab[next_token_idx][0], self.vocab[next_token_idx][1]]
-                print(f"Debug - Selected highest probability token: {next_token}")
             else:
                 # Normal temperature-based sampling
                 scaled_scores = [score / temperature for score in scores]
                 probs = self.softmax(scaled_scores)
                 
                 random_value = random([0, 1])
-                print(f"Debug - Random value for sampling: {random_value}")
                 
                 cumulative_prob = 0.0
                 next_token_idx = 0
@@ -1917,189 +2234,147 @@ class Transformer:
                         break
                 
                 next_token = [self.vocab[next_token_idx][0], self.vocab[next_token_idx][1]]
-                print(f"Debug - Selected token through sampling: {next_token}")
             
             # Check for end token (100257)
             if next_token[1] == 100257:
-                print("Debug - End token detected, breaking generation loop")
                 break
             
             # Add token to output
             output += next_token[0]
             current_context += next_token[0]
-            print(f"Debug - Current output: '{output}'")
         
-        print(f"Debug - Final generated output: '{output}'")
         return output
     def interactive_test_loop(self, epoch_num, avg_loss, optimizer):
-        print("\n[🧪 Interactive Test Mode]")
+        ndprint("\n[🧪 Interactive Test Mode]")
         try:
-            print("If you're still here, type anything to enter testing mode.")
+            ndprint("If you're still here, type anything to enter testing mode.")
             poke = inputimeout(prompt="Are you there? (30s): ", timeout=30)
         except TimeoutOccurred:
-            print("[Info] Timeout. Skipping testing.")
+            ndprint("[Info] Timeout. Skipping testing.")
             return optimizer
 
         while True:
             try:
-                user_input = input(">>> ").strip()
+                user_input = input("› ").strip()
             except KeyboardInterrupt:
-                print("\n[Info] Skipping interactive testing...")
+                ndprint("\n[Info] Skipping interactive testing...")
                 break
 
             if user_input == "":
-                print("[Info] Skipping...")
+                ndprint("[Info] Skipping...")
                 break
             elif user_input == "/continue":
-                print("[Info] Continuing to next epoch...")
+                ndprint("[Info] Continuing to next epoch...")
                 break
             elif user_input == "/stop":
-                print("[Info] Stopping training.")
+                ndprint("[Info] Stopping training.")
                 return "STOP_TRAINING"
             elif user_input.startswith("/save"):
                 parts = user_input.split(" ", 1)
                 save_path = parts[1] if len(parts) > 1 else f"model_{optimizer}.json"
                 try:
                     self.save(save_path)
-                    print(f"[Info] Model saved to {save_path}")
+                    ndprint(f"[Info] Model saved to {save_path}")
                 except Exception as e:
-                    print(f"[Error] Could not save: {e}")
+                    ndprint(f"[Error] Could not save: {e}")
             elif user_input.startswith("/switch_to_"):
                 new_opt = user_input[len("/switch_to_"):]
                 if new_opt in ["adam", "sgd", "sgd_momentum"]:
-                    print(f"[Info] Switching to {new_opt.upper()}")
+                    ndprint(f"[Info] Switching to {new_opt.upper()}")
                     return new_opt
                 else:
-                    print("[Error] Unknown optimizer.")
+                    ndprint("[Error] Unknown optimizer.")
             elif user_input.startswith("/temperature"):
                 parts = user_input.split(" ", 1)
                 if len(parts) < 2:
-                    print(f"[Current Temperature] {self.temperature}")
+                    ndprint(f"[Current Temperature] {self.temperature}")
                 else:
                     try:
                         temp = float(parts[1])
                         self.temperature = temp
-                        print(f"[Info] Set temperature to {temp}")
+                        ndprint(f"[Info] Set temperature to {temp}")
                     except:
-                        print("[Error] Invalid value.")
+                        ndprint("[Error] Invalid value.")
             elif user_input == "/info":
-                print(f"[Info] Epoch: {epoch_num+1}, Loss: {avg_loss:.4f}, Optimizer: {optimizer}, Temperature: {self.temperature}")
+                ndprint(f"[Info] Epoch: {epoch_num+1}, Loss: {avg_loss:.4f}, Optimizer: {optimizer}, Temperature: {self.temperature}")
             elif user_input == "/help":
-                print("Available commands:")
-                print("  /continue        Continue training")
-                print("  /stop            Stop training")
-                print("  /save [path]     Save model (optional path)")
-                print("  /switch_to_*     Switch optimizer (sgd, adam, sgd_momentum)")
-                print("  /temperature X   Set or view temperature")
-                print("  /info            Show current training info")
-                print("  /help            Show this help message")
+                ndprint("Available commands:")
+                ndprint("  /continue        Continue training")
+                ndprint("  /stop            Stop training")
+                ndprint("  /save [path]     Save model (optional path)")
+                ndprint("  /switch_to_*     Switch optimizer (sgd, adam, sgd_momentum)")
+                ndprint("  /temperature X   Set or view temperature")
+                ndprint("  /info            Show current training info")
+                ndprint("  /help            Show this help message")
             else:
                 prompt = f"user:\n{user_input}\nyou:\n"
-                print("Input tokens:", [t[0] for t in self.tokenize(prompt)])
-                print("Generated response:")
                 try:
                     output = self.generate(prompt, temperature=self.temperature)
-                    print(output)
+                    ndprint(output)
                 except Exception as e:
-                    print(f"[Error] Failed to generate: {e}")
+                    ndprint(f"[Error] Failed to generate: {e}")
 
         return optimizer
 
-#! Here I load my dataset that's not very important but it's just to tell you you have to load it yourself.
-try:
-    dataset = json.loads(open("dataset.json", "r").read())
-except Exception:
-    print("Failed to read dataset, exiting...")
-    exit(1)
-
-#! Setting the flag to False will load the model at the path specified (default: model_adam.json)
-#! Setting the flag to True will train a new model based on an io json dataset (default: dataset.json)
-#! and one or multiple pre-training dataset(s) (default: pre-training1.txt and pre-training2.txt) 
-flag = True
-
 if flag:
     transformer = Transformer(True, {
-        "contextSize": 64, #? Self explanatory.
-        "embeddingSize": 32, #? If you raise this number the model will understand better how tokens relate to
-                             #? each other, but it will be heavier to run.    
-        "learningRate": 0.0005, #? You can try to tweak this but this is generally a good value for the adam
-                                #? optimizer, higher will make the model learn faster but it may overshoot the
-                                #? optimal values and learn worse as a result. Lower will make the model learn
-                                #? slower but it will be more precise which will result in a better model.
-        "maxOutputSize": 16, #? Self explanatory.
-        "layersAmount": 2, #? The model will be deeper and therefore have deeper understanding if you make.
-                           #? make this higher but it will be heavier to run.
-        "heads": 2, #? If you raise this number, the model will understand better what queries relate to                    
-        "use_he_init": True, #? He initialization is enabled by default here, you can disable it for purely
-                             #? random init but I don't recommand it.
-        "biasesinitrange": [-0.01, 0.01], #? You can try to tweak this if you want but this is generally a
-                                          #? good range for biases.
-        "embeddinginitrange": [-0.1, 0.1], #? Same here.
-        "dataset": dataset #! Put the dataset you loaded here.
+        "contextSize": config["contextSize"],
+        "embeddingSize": config["embeddingSize"],
+        "learningRate": config["learningRate"],
+        "maxOutputSize": config["maxOutputSize"],
+        "layersAmount": config["layersAmount"],
+        "heads": config["heads"],                  
+        "use_he_init": True,
+        "biasesinitrange": config["biasesinitrange"],
+        "embeddinginitrange": config["embeddinginitrange"],
     })
-
-    #! The epoch count is intentionally set absurdly high here (1000) because the interactive mode lets you
-    #! test the model while it's pre-training or training, save your progress, stop the process,
-    #! or even switch optimizers on the fly. If you stop pre-training, it'll jump straight to
-    #! training, and if you stop training, you'll land in the final interactive console where
-    #! you can test your model and/or save it before exiting.
-    transformer.pretrain(["pre-training1.txt", "pre-training2.txt"], epochs=1000, optimizer="adam") #! Put your pre-training files paths here.
-                                                                                                    #? You can change the optimizer to either sgd or
-                                                                                                    #? sgd_momentum but they are generally slower and
-                                                                                                    #? get stuck more easily than adam. I recommand
-                                                                                                    #? keeping adam.
-    transformer.train(1000, optimizer="adam") #? Same here for the optimizer.
+    if pretraining__:
+        transformer.pretrain(config["pre-training-paths"], epochs=config["pre-train-epochs"], optimizer=config["pre-train-optimizer"])
+    if training__:
+        transformer.train(config["training-dataset-path"], config["train-epochs"], optimizer=config["train-optimizer"])
 else:
-    transformer = Transformer(new=False, path="model_adam.json", parameters={
-        "dataset": dataset #! You still need to specify the dataset even when loading a model, because
-                           #! the way I built this is that you can call .train() without specifying the
-                           #! dataset in it because it is in the model object even tough it isn't saved in
-                           #! the model file which is why you need to specify it again.
-                           #? This issue does not exist for pre-training because I built it afterwards.
-    })
+    transformer = Transformer(new=False, path=model_location)
 
 try:
-    print("\nEntering interactive mode. Type a message or command:")
-    print("Commands: /save [path], /temperature [value], /help, /exit")
+    ndprint("\nEntering interactive mode. Type a message or command:")
+    ndprint("Commands: /save [path], /temperature [value], /help, /exit")
 
     def generate_response(text):
         formatted_input = f"user:\n{text}\nyou:\n"
-        print(f"Debug - Formatted input: '{formatted_input}'")
         tokenized = transformer.tokenize(formatted_input)
-        print(f"Debug - Tokenized input: {tokenized}")
         return transformer.generate(formatted_input, temperature=transformer.temperature)
 
     while True:
-        text = input("> ").strip()
+        text = input("› ").strip()
 
         if text.startswith("/save "):
             path = text[6:]
             transformer.save(path)
-            print("Model saved to", path)
+            ndprint("Model saved to", path)
             continue
 
         elif text == "/save":
             transformer.save()
-            print("Model saved to model.json")
+            ndprint("Model saved to model.json")
             continue
 
         elif text.startswith("/temperature"):
             parts = text.split(" ", 1)
             if len(parts) == 1:
-                print("Current temperature:", transformer.temperature)
+                ndprint("Current temperature:", transformer.temperature)
             else:
                 try:
                     transformer.temperature = float(parts[1])
-                    print("Set temperature to", transformer.temperature)
+                    ndprint("Set temperature to", transformer.temperature)
                 except:
-                    print("Invalid temperature value.")
+                    ndprint("Invalid temperature value.")
             continue
         
         elif text == "/help":
-            print("Available commands:")
-            print("  /save [path]     Save model to file")
-            print("  /temperature X   Set or view temperature")
-            print("  /exit            Exit interactive mode")
+            ndprint("Available commands:")
+            ndprint("  /save [path]     Save model to file")
+            ndprint("  /temperature X   Set or view temperature")
+            ndprint("  /exit            Exit interactive mode")
             continue
 
         elif text == "/exit":
@@ -2107,10 +2382,9 @@ try:
             break
 
         # Generate output
-        print("Input tokens:", [token[0] for token in transformer.tokenize(f"user:\n{text}\nyou:\n")])
         output = generate_response(text)
-        print("Generated output:", output)
+        ndprint(output)
 
 except KeyboardInterrupt:
-    print("\nExiting interactive mode.")
+    ndprint("\nExiting interactive mode.")
     exit(0)

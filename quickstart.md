@@ -1,10 +1,7 @@
 # Quickstart
 ## To use the code out of the box
-- Hit ctrl + f in app.py
-- Search for ```transformer.pretrain(["pre-training1.txt", "pre-training2.txt"], epochs=1000, optimizer="adam")```
-- Comment that line by putting a # at the start of it
-- Run the code using python app.py
-- Congrats, you are now training an ai model to respond to basic greetings on the dataset.json dataset without pre-training which will take you about 3-5 days at rasberry pi 5 speeds for perfect accuracy.
+- Open a terminal
+- Run python app.py --new --config config.json --train
 
 ## To do some actual serious training
 - Hit ctrl + f in app.py
@@ -34,3 +31,4 @@ Interactive mode will trigger every time a new epoch is completed and will expir
 - README.md: Main readme, what you land on when you go on the repo on github.
 - requirements.txt: Dependencies list if you want to install in venv environement with ```pip install -r requirements.txt``` but if you don't want to you can just let the script auto install the dependencies.
 - vocabulary.json: Tiktoken gpt4 vocabulary but cleaned of tokens I didn't like.
+- config.json: Example of configuration for a model.
