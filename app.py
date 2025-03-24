@@ -2015,7 +2015,7 @@ except Exception:
 #! Setting the flag to False will load the model at the path specified (default: model_adam.json)
 #! Setting the flag to True will train a new model based on an io json dataset (default: dataset.json)
 #! and one or multiple pre-training dataset(s) (default: pre-training1.txt and pre-training2.txt) 
-flag = False
+flag = True
 
 if flag:
     transformer = Transformer(True, {
@@ -2060,7 +2060,7 @@ else:
 
 try:
     print("\nEntering interactive mode. Type a message or command:")
-    print("Commands: /save [path], /temperature [value], /exit")
+    print("Commands: /save [path], /temperature [value], /help, /exit")
 
     def generate_response(text):
         formatted_input = f"user:\n{text}\nyou:\n"
