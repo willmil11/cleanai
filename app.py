@@ -1406,6 +1406,15 @@ class Transformer:
         """
         subtimer = timer_()
         ndprint("Preprocessing dataset...")
+        print("Loading dataset...")
+        timer = timer_()
+        
+        try:
+            dataset = json.loads(open(dataset).read())
+            print("Dataset loaded in", timer_end(timer), "ms")
+        except Exception as e:
+            print(f"Failed to load dataset: {e}")
+            raise Exception(f"Failed to load dataset: {e}")
         print("Contextizing dataset...")
         timer = timer_()
         contexted_dataset = []
@@ -1489,7 +1498,7 @@ class Transformer:
                     response_token_masks[i] = response_token_masks[i][:expected_tokens]
                 
         print("Tokenized contexted dataset in", timer_end(timer), "ms")
-        ndprint("Preprocessed dataset in " + timer_end(subtimer) + "ms")
+        ndprint("Preprocessed dataset in " + str(timer_end(subtimer)) + "ms")
         import threading
         import time
         
@@ -1675,7 +1684,7 @@ class Transformer:
             ndprint("Epoch", epoch + 1, "completed in", timer_end(timer), "ms")
         
         ndprint(f"\n{'='*40}\nTraining completed after {len(epoch_losses)} epochs\nFinal loss: {epoch_losses[-1]:.6f}\nBest loss: {best_loss:.6f}\n{'='*40}\n")
-        ndprint("Time elapsed: " + timer_end(sgtimer) + "ms")
+        ndprint("Time elapsed: " + str(timer_end(sgtimer)) + "ms")
         return best_loss
 
     def pretrain(self, text_files, epochs=1, optimizer="sgd"):
@@ -1825,7 +1834,7 @@ class Transformer:
                 optimizer = result
 
         ndprint(f"\n{'='*40}\nPretraining complete\n{'='*40}\n")
-        ndprint("Time elapsed: " + timer_end(sgtimer) + "ms")
+        ndprint("Time elapsed: " + str(timer_end(sgtimer)) + "ms")
     
     def inference(self, context, return_cache, training_mode=False):
         def scale_activation(vector, base_gamma=5.0):
