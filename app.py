@@ -320,6 +320,10 @@ if "--new" in args:
                     if not isinstance(configtoparse[key], bool):
                         print(f"Config file parameter {key} must be a boolean, not a {type(configtoparse[key])}")
                         exit(1)
+                if key == "microbatchSize":
+                    if not isinstance(configtoparse[key], int):
+                        print(f"Config file parameter {key} must be an int, not a {type(configtoparse[key])}")
+                        exit(1)
                 config[key] = configtoparse[key]
 
     config = configtoparse
@@ -979,8 +983,277 @@ class Transformer:
             return zero_dict
         # Base case - always return a [value, momentum, velocity] list
         return [0, 0, 0]
+    def add_in_place(self, target, source):
+        if isinstance(target, list):
+            for i in range(len(target)):
+                if isinstance(target[i], list):
+                    self.add_in_place(target[i], source[i])
+                else:
+                    target[i] += source[i]
+        elif isinstance(target, dict):
+            for key in target:
+                self.add_in_place(target[key], source[key])
+    def apply_gradients(self, optimizer):
+        """Apply accumulated gradients from microbatch"""
+        if self.accumulated_embedding_grads is None:
+            return
 
-    def train_step(self, input_tokens, target_token, optimizer="sgd", training_mode=True):
+        # Extract accumulated gradients
+        embedding_gradients = self.accumulated_embedding_grads
+        layer_gradients = self.accumulated_layer_grads
+        vocab_proj_weight_gradients = self.accumulated_vocab_grads["weights"]
+        vocab_proj_bias_gradients = self.accumulated_vocab_grads["biases"]
+
+        # Calculate learning rate (same logic as in train_step)
+        warmup_steps = 100
+        decay_factor = 0.25
+        base_lr = self.learningRate
+        min_lr = 0.0005
+
+        # Update step number and Adam params
+        if optimizer == "adam":
+            self.adam_params['t'] += 1
+        self.step_num += 1
+        
+        # Calculate learning rate
+        if self.step_num < warmup_steps:
+            lr = base_lr * (self.step_num / warmup_steps)
+        else:
+            lr = base_lr * (warmup_steps ** 0.5) * ((self.step_num * decay_factor) ** -0.5)
+        
+        # Apply cyclical learning rate adjustment
+        cycle_length = 50
+        cycle_position = self.step_num % cycle_length
+        cycle_ratio = cycle_position / cycle_length
+        cycle_factor = 1.0
+        lr = lr * cycle_factor
+        
+        # Apply minimum learning rate
+        lr = max(min_lr, lr)
+        
+        # Weight decay parameter
+        weight_decay = 0  # L2 regularization factor
+        if config["antiOverfittingOptimisations"]:
+            weight_decay = 1e-5
+        
+        # For SGD with momentum
+        momentum_factor = 0.5  # Classic momentum value
+        if optimizer == "sgd_momentum" and not hasattr(self, 'momentum_initialized'):
+            print("Initializing momentum for first use")
+            self.momentum_initialized = True
+
+        # Update embeddings - FIXED: Process all batches of tokens
+        vocab_indices = {}  # Track which token indices we've updated
+        
+        for batch_tokens in self.accumulated_token_inputs:
+            for token_idx, (token, token_id) in enumerate(batch_tokens):
+                # Find the index in vocabulary
+                vocab_idx = None
+                for i, vocab_token in enumerate(self.vocab):
+                    if vocab_token[1] == token_id:
+                        vocab_idx = i
+                        break
+                
+                if vocab_idx is not None:
+                    vocab_indices[vocab_idx] = True
+                    for pos in range(self.embeddingSize):
+                        grad = embedding_gradients[token_idx][pos]
+                        param = self.transformer["embeddings"][vocab_idx][pos]
+                        
+                        # Get gradient value
+                        grad_value = grad if isinstance(grad, (int, float)) else grad[0] if isinstance(grad, list) else 0
+                        
+                        # Add weight decay (L2 regularization)
+                        grad_value += weight_decay * param[0]
+                        
+                        if optimizer == "adam":
+                            # Adam update
+                            param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
+                            param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                            
+                            # Compute bias-corrected estimates
+                            m_hat = param[1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                            v_hat = param[2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                            
+                            # Update parameter value
+                            param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                        elif optimizer == "sgd_momentum":
+                            # SGD with momentum update
+                            param[1] = momentum_factor * param[1] + grad_value
+                            param[0] -= lr * param[1]
+                        else:
+                            # Plain SGD update
+                            param[0] -= lr * grad_value
+
+        # Update layer parameters
+        for layer_idx in range(self.layersAmount):
+            layer = self.transformer["layers"][layer_idx]
+            layer_grad = layer_gradients[layer_idx]
+            
+            for param_type in ["weights", "biases"]:
+                for key in layer[param_type].keys():
+                    if isinstance(layer[param_type][key], list):
+                        for i in range(len(layer[param_type][key])):
+                            grad = layer_grad[param_type][key][i]
+                            param = layer[param_type][key][i]
+                            
+                            # Get gradient value
+                            grad_value = grad[0] if isinstance(grad, list) else grad
+                            
+                            # Add weight decay (L2 regularization)
+                            if param_type == "weights":  # Only apply to weights, not biases
+                                grad_value += weight_decay * param[0]
+                            
+                            if optimizer == "adam":
+                                # Adam update
+                                param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
+                                param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                                
+                                # Compute bias-corrected estimates
+                                m_hat = param[1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                                v_hat = param[2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                                
+                                # Update parameter
+                                param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                            elif optimizer == "sgd_momentum":
+                                # SGD with momentum update
+                                param[1] = momentum_factor * param[1] + grad_value
+                                param[0] -= lr * param[1]
+                            else:
+                                # SGD update
+                                param[0] -= lr * grad_value
+                                
+                    elif isinstance(layer[param_type][key], dict):  # For nested structures like attention heads
+                        for subkey in layer[param_type][key].keys():
+                            if subkey == "heads":
+                                # Special handling for attention heads
+                                for head_idx in range(self.heads):
+                                    for head_key in ["query", "key", "value"]:
+                                        head_params = layer[param_type][key][subkey][head_idx][head_key]
+                                        head_grads = layer_grad[param_type][key][subkey][head_idx][head_key]
+                                        
+                                        for i in range(len(head_params)):
+                                            if isinstance(head_params[i], list) and len(head_params[i]) >= 3:
+                                                # Get the gradient
+                                                grad_value = head_grads[i][0] if isinstance(head_grads[i], list) else head_grads[i]
+                                                
+                                                # Add weight decay (L2 regularization)
+                                                if param_type == "weights":  # Only apply to weights, not biases
+                                                    grad_value += weight_decay * head_params[i][0]
+                                                
+                                                if optimizer == "adam":
+                                                    # Adam update
+                                                    head_params[i][1] = self.adam_params['beta1'] * head_params[i][1] + (1 - self.adam_params['beta1']) * grad_value
+                                                    head_params[i][2] = self.adam_params['beta2'] * head_params[i][2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                                                    
+                                                    # Compute bias-corrected estimates
+                                                    m_hat = head_params[i][1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                                                    v_hat = head_params[i][2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                                                    
+                                                    # Update parameter
+                                                    head_params[i][0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                                                elif optimizer == "sgd_momentum":
+                                                    # SGD with momentum update
+                                                    head_params[i][1] = momentum_factor * head_params[i][1] + grad_value
+                                                    head_params[i][0] -= lr * head_params[i][1]
+                                                else:
+                                                    # SGD update
+                                                    head_params[i][0] -= lr * grad_value
+                            else:
+                                # For other nested dictionaries like "output"
+                                nested_params = layer[param_type][key][subkey]
+                                nested_grads = layer_grad[param_type][key][subkey]
+                                
+                                if isinstance(nested_params, list) and isinstance(nested_grads, list):
+                                    for i in range(len(nested_params)):
+                                        if isinstance(nested_params[i], list) and len(nested_params[i]) >= 3:
+                                            # Get the gradient
+                                            grad_value = nested_grads[i][0] if isinstance(nested_grads[i], list) else nested_grads[i]
+                                            
+                                            # Add weight decay (L2 regularization)
+                                            if param_type == "weights":  # Only apply to weights, not biases
+                                                grad_value += weight_decay * nested_params[i][0]
+                                            
+                                            if optimizer == "adam":
+                                                # Adam update
+                                                nested_params[i][1] = self.adam_params['beta1'] * nested_params[i][1] + (1 - self.adam_params['beta1']) * grad_value
+                                                nested_params[i][2] = self.adam_params['beta2'] * nested_params[i][2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                                                
+                                                # Compute bias-corrected estimates
+                                                m_hat = nested_params[i][1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                                                v_hat = nested_params[i][2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                                                
+                                                # Update parameter
+                                                nested_params[i][0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                                            elif optimizer == "sgd_momentum":
+                                                # SGD with momentum update
+                                                nested_params[i][1] = momentum_factor * nested_params[i][1] + grad_value
+                                                nested_params[i][0] -= lr * nested_params[i][1]
+                                            else:
+                                                # SGD update
+                                                nested_params[i][0] -= lr * grad_value
+
+            # Update vocabulary projection parameters
+            # Update weights
+            for i in range(len(self.transformer["vocab_projection"]["weights"])):
+                param = self.transformer["vocab_projection"]["weights"][i]
+                grad_value = vocab_proj_weight_gradients[i][0]
+                
+                # Add weight decay (L2 regularization)
+                grad_value += weight_decay * param[0]
+                
+                if optimizer == "adam":
+                    # Adam update
+                    param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
+                    param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                    
+                    # Compute bias-corrected estimates
+                    m_hat = param[1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                    v_hat = param[2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                    
+                    # Update parameter
+                    param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                elif optimizer == "sgd_momentum":
+                    # SGD with momentum update
+                    param[1] = momentum_factor * param[1] + grad_value
+                    param[0] -= lr * param[1]
+                else:
+                    # SGD update
+                    param[0] -= lr * grad_value
+
+            # Update biases
+            for i in range(len(self.transformer["vocab_projection"]["biases"])):
+                param = self.transformer["vocab_projection"]["biases"][i]
+                grad_value = vocab_proj_bias_gradients[i][0]
+                
+                if optimizer == "adam":
+                    # Adam update
+                    param[1] = self.adam_params['beta1'] * param[1] + (1 - self.adam_params['beta1']) * grad_value
+                    param[2] = self.adam_params['beta2'] * param[2] + (1 - self.adam_params['beta2']) * (grad_value ** 2)
+                    
+                    # Compute bias-corrected estimates
+                    m_hat = param[1] / (1 - self.adam_params['beta1'] ** self.adam_params['t'])
+                    v_hat = param[2] / (1 - self.adam_params['beta2'] ** self.adam_params['t'])
+                    
+                    # Update parameter
+                    param[0] -= lr * m_hat / (math.sqrt(v_hat) + self.adam_params['epsilon'])
+                elif optimizer == "sgd_momentum":
+                    # SGD with momentum update
+                    param[1] = momentum_factor * param[1] + grad_value
+                    param[0] -= lr * param[1]
+                else:
+                    # SGD update
+                    param[0] -= lr * grad_value
+
+            # Clear accumulated gradients after updating
+            self.accumulated_embedding_grads = None
+            self.accumulated_layer_grads = None
+            self.accumulated_vocab_grads = None
+            self.accumulated_token_inputs = None  # Also clear the token inputs used for embedding lookups
+            
+            ndprint("Microbatch gradients applied.")
+
+    def train_step(self, input_tokens, target_token, optimizer="sgd", training_mode=True, accumulate=False):
         ndprint("Starting training step...")
         gtimer = timer_()
         
@@ -1259,7 +1532,27 @@ class Transformer:
 
         print("Applied continuous gradient scaling in", timer_end(timer), "ms")
 
-        
+        if accumulate:
+            if self.accumulated_embedding_grads is None:
+                self.accumulated_embedding_grads = embedding_gradients
+                self.accumulated_layer_grads = layer_gradients
+                self.accumulated_vocab_grads = {
+                    "weights": vocab_proj_weight_gradients,
+                    "biases": vocab_proj_bias_gradients
+                }
+                # FIXED: Store all input tokens as a list
+                self.accumulated_token_inputs = [input_tokens]
+            else:
+                self.add_in_place(self.accumulated_embedding_grads, embedding_gradients)
+                self.add_in_place(self.accumulated_layer_grads, layer_gradients)
+                self.add_in_place(self.accumulated_vocab_grads["weights"], vocab_proj_weight_gradients)
+                self.add_in_place(self.accumulated_vocab_grads["biases"], vocab_proj_bias_gradients)
+                # FIXED: Add this batch's tokens to the list
+                self.accumulated_token_inputs.append(input_tokens)
+
+            ndprint("Gradients accumulated, delaying parameter update.")
+            return initial_loss
+
         print("Updating parameters...")
         timer = timer_()
         
@@ -1862,22 +2155,48 @@ class Transformer:
                         continue
 
                 tokens = state["tokens"]
+                microbatch = []
 
-                while token_index < len(tokens) - 1:
-                    if context:
-                        input_tokens = context[:]
-                        target_token = tokens[token_index + 1]
-                        loss = self.train_step(input_tokens, target_token, optimizer=optimizer, training_mode=True)
-                        epoch_losses.append(loss)
+                while token_index + self.contextSize < len(tokens):
+                    input_tokens = tokens[token_index : token_index + self.contextSize]
+                    target_token = tokens[token_index + self.contextSize]
+                    
+                    microbatch.append((input_tokens, target_token))
 
-                        if (token_index + 1) % 25 == 0 or token_index + 1 == len(tokens) - 1:
-                            ndprint(f"Progress in {state['path']}: {token_index + 1}/{len(tokens) - 1} | Loss: {loss:.4f}", flush=True)
+                    if len(microbatch) == config["microbatchSize"]:
+                        # Accumulate gradients for all samples
+                        total_loss = 0.0
+                        for input_tokens, target_token in microbatch:
+                            loss = self.train_step(input_tokens, target_token, optimizer, training_mode=True, accumulate=True)
+                            total_loss += loss
 
-                    context.append(tokens[token_index])
-                    if len(context) > self.contextSize:
-                        context = context[1:]
+                        # Apply update once
+                        self.apply_gradients(optimizer)
+                        
+                        avg_loss = total_loss / config["microbatchSize"]
+                        epoch_losses.append(avg_loss)
+                        ndprint(f"Microbatch loss: {avg_loss:.4f}")
+                        
+                        # Clear the microbatch
+                        microbatch = []
 
-                    token_index += 1
+                    token_index += self.contextSize
+
+                # FIXED: Process any remaining samples in the last microbatch
+                if microbatch:  # Non-empty check
+                    # Process remaining samples
+                    total_loss = 0.0
+                    for input_tokens, target_token in microbatch:
+                        loss = self.train_step(input_tokens, target_token, optimizer, training_mode=True, accumulate=True)
+                        total_loss += loss
+
+                    # Apply accumulated gradients
+                    self.apply_gradients(optimizer)
+                    
+                    avg_loss = total_loss / len(microbatch)
+                    epoch_losses.append(avg_loss)
+                    ndprint(f"Final partial microbatch loss: {avg_loss:.4f}")
+                    microbatch = []
 
                 file_index += 1
                 token_index = 0

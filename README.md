@@ -1,6 +1,6 @@
 # Cleanai
 ## What is this?
-This is a project of mine that as of 24.03.2025 I've been working on for about 6 months. This is a transformer architecture with pre-training and training implemented in pure python. It only requires tiktoken for tokenization and inputimeout for the interactive console mode as you can see in requirements.txt, not even numpy. Only pure raw python no abstractions. You can see the <a href="./quickstart.md">quickstart</a>
+This is a project of mine that as of 26.03.2025 I've been working on for about 3 months. This is a transformer architecture with pre-training and training implemented in pure python. It only requires tiktoken for tokenization and inputimeout for the interactive console mode as you can see in requirements.txt, not even numpy. Only pure raw python no abstractions. You can see the <a href="./quickstart.md">quickstart</a>
 
 ## Why?
 I wanted to see how this actually works therfore I decided to put Claude and Chatgpt to work to teach me how all of this works, I also used them to implement some parts of the code like training but I generally understand how it works now. Because this works and this is really cool I am releasing it on github publicly :)
