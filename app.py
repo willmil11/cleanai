@@ -464,14 +464,54 @@ class Transformer:
            print("Failed to read vocabulary file, creating error...")
            raise Exception("Failed to read vocabulary file")
        ndprint("Successfully read vocabulary file")
-
+       ndprint("Computing lookup table...")
+       self.id_to_token = {tok[1]: tok[0] for tok in self.vocab}
+       ndprint("Computed lookup table")
        self.encoder = tiktoken.get_encoding("cl100k_base")  # Same as GPT-4
        self.temperature = 0.7
 
        if new:
            ndprint("Initializing model...")
+           # Calculate total parameters
+           total_params = (
+               # Token embeddings: vocab_size * embedding_size
+               len(self.vocab) * parameters["embeddingSize"] +
+               # Position embeddings: context_size * embedding_size
+               parameters["contextSize"] * parameters["embeddingSize"] +
+               # For each layer
+               parameters["layersAmount"] * (
+                   # Layer norm 1: 2 * embedding_size (weights and biases)
+                   2 * parameters["embeddingSize"] +
+                   # Attention: For each head (query, key, value weights and biases)
+                   parameters["heads"] * (3 * parameters["embeddingSize"] * parameters["embeddingSize"] // parameters["heads"] + 3 * parameters["embeddingSize"] // parameters["heads"]) +
+                   # Attention output projection: embedding_size * embedding_size + embedding_size
+                   parameters["embeddingSize"] * parameters["embeddingSize"] + parameters["embeddingSize"] +
+                   # Layer norm 2: 2 * embedding_size (weights and biases)
+                   2 * parameters["embeddingSize"] +
+                   # Feed forward grow: embedding_size * (4 * embedding_size) + 4 * embedding_size
+                   parameters["embeddingSize"] * (4 * parameters["embeddingSize"]) + 4 * parameters["embeddingSize"] +
+                   # Feed forward shrink: (4 * embedding_size) * embedding_size + embedding_size
+                   (4 * parameters["embeddingSize"]) * parameters["embeddingSize"] + parameters["embeddingSize"]
+               )
+           )
+
+           total_ram = total_params * 8 #(64 bit floats take up 8 bytes each)
+
+           ndprint("Model is of size " + str(total_params) + " parameters")
+           total_ram = total_params * 8  # 64 bit floats take up 8 bytes each
+           ndprint(f"                 ~{total_params / 1e9:.2f}b parameters")
+           ndprint("")
+           adam_ram = total_params * 3 * 8  # Assuming 3 times the parameters for Adam
+           ndprint("Would cost the equivalent of " + str(total_params * 3) + " parameters if trained with Adam")
+           ndprint(f"                             ~{total_params * 3 / 1e9:.2f}b parameters if trained with adam")
+           ndprint("")
+           sgd_momentum_ram = total_params * 2 * 8  # Assuming 2 times the parameters for SGD with momentum
+           ndprint("Would cost the equivalent of " + str(total_params * 2) + " parameters if trained with SGD with momentum")
+           ndprint(f"                             ~{total_params * 2 / 1e9:.2f}b parameters if trained with SGD with momentum")
+           ndprint("")
+           ndprint("Would not cost more than the original size of the model if trained with vanilla SGD")
            sgtimer = timer_()
-           print("Initializing parameters...")
+           ndprint("Initializing parameters...")
            timer = timer_()
            self.contextSize = parameters["contextSize"]
            self.embeddingSize = parameters["embeddingSize"]
@@ -488,8 +528,9 @@ class Transformer:
            self.embeddinginitrange = parameters["embeddinginitrange"]
            self.transformer = {}
            self.step_num = 0
-           print("Initialized parameters in", timer_end(timer), "ms")
-           print("Initializing layers...")
+           ndprint("Initialized parameters in", timer_end(timer), "ms")
+           percentagePrintInterval = 10
+           ndprint("Initializing layers...")
            gtimer = timer_()
            self.transformer["layers"] = []
            for i in range(self.layersAmount):
@@ -545,62 +586,135 @@ class Transformer:
                    #Grow: embedding_size * (embedding_size * 4) weights and (embedding_size * 4) biases
                    #Shrink: (embedding_size * 4) * embedding_size weights and embedding_size biases
 
+               # Calculate total parameters for progress tracking
+               total_params = 2 * self.embeddingSize + 3 * self.heads * (self.embeddingSize * self.embeddingSize + self.embeddingSize) + self.embeddingSize * (self.embeddingSize * self.heads) + self.embeddingSize + 2 * self.embeddingSize + self.embeddingSize * (self.embeddingSize * 4) + (self.embeddingSize * 4) + (self.embeddingSize * 4) * self.embeddingSize + self.embeddingSize
+               params_done = 0
+               last_percent = -percentagePrintInterval  # Start at -percentagePrintInterval to ensure first 0% is printed
+
                for j in range(self.embeddingSize):
                    self.transformer["layers"][i]["weights"]["normalize_1"].append([random(self.weightsinitrange), 0, 0])
                    self.transformer["layers"][i]["biases"]["normalize_1"].append([random(self.biasesinitrange), 0, 0])
                    self.transformer["layers"][i]["weights"]["normalize_2"].append([random(self.weightsinitrange), 0, 0])
                    self.transformer["layers"][i]["biases"]["normalize_2"].append([random(self.biasesinitrange), 0, 0])
+                   params_done += 4
+                   percent = (params_done * 100) // total_params
+                   if percent >= last_percent + percentagePrintInterval:
+                       last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                       ndprint(f"  Layer {i}: {last_percent}% complete")
                
                for j in range(self.heads):
                    for k in range(self.embeddingSize * self.embeddingSize):
                        self.transformer["layers"][i]["weights"]["attention"]["heads"][j]["query"].append([random(self.weightsinitrange), 0, 0])
                        self.transformer["layers"][i]["weights"]["attention"]["heads"][j]["key"].append([random(self.weightsinitrange), 0, 0])
                        self.transformer["layers"][i]["weights"]["attention"]["heads"][j]["value"].append([random(self.weightsinitrange), 0, 0])
+                       params_done += 3
+                       percent = (params_done * 100) // total_params
+                       if percent >= last_percent + percentagePrintInterval:
+                           last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                           ndprint(f"  Layer {i}: {last_percent}% complete")
                    for k in range(self.embeddingSize):
                        self.transformer["layers"][i]["biases"]["attention"]["heads"][j]["query"].append([random(self.biasesinitrange), 0, 0])
                        self.transformer["layers"][i]["biases"]["attention"]["heads"][j]["key"].append([random(self.biasesinitrange), 0, 0])
                        self.transformer["layers"][i]["biases"]["attention"]["heads"][j]["value"].append([random(self.biasesinitrange), 0, 0])
+                       params_done += 3
+                       percent = (params_done * 100) // total_params
+                       if percent >= last_percent + percentagePrintInterval:
+                           last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                           ndprint(f"  Layer {i}: {last_percent}% complete")
                
                for j in range(self.embeddingSize * (self.embeddingSize * self.heads)):
                    self.transformer["layers"][i]["weights"]["attention"]["output"].append([random(self.weightsinitrange), 0, 0])
+                   params_done += 1
+                   percent = (params_done * 100) // total_params
+                   if percent >= last_percent + percentagePrintInterval:
+                       last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                       ndprint(f"  Layer {i}: {last_percent}% complete")
                for j in range(self.embeddingSize):
                    self.transformer["layers"][i]["biases"]["attention"]["output"].append([random(self.biasesinitrange), 0, 0])
+                   params_done += 1
+                   percent = (params_done * 100) // total_params
+                   if percent >= last_percent + percentagePrintInterval:
+                       last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                       ndprint(f"  Layer {i}: {last_percent}% complete")
 
                for j in range(self.embeddingSize * (self.embeddingSize * 4)):
                    self.transformer["layers"][i]["weights"]["feed_forward"]["grow"].append([random(self.weightsinitrange), 0, 0])
+                   params_done += 1
+                   percent = (params_done * 100) // total_params
+                   if percent >= last_percent + percentagePrintInterval:
+                       last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                       ndprint(f"  Layer {i}: {last_percent}% complete")
                for j in range(self.embeddingSize * 4):
                    self.transformer["layers"][i]["biases"]["feed_forward"]["grow"].append([random(self.biasesinitrange), 0, 0])
+                   params_done += 1
+                   percent = (params_done * 100) // total_params
+                   if percent >= last_percent + percentagePrintInterval:
+                       last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                       ndprint(f"  Layer {i}: {last_percent}% complete")
 
                for j in range((self.embeddingSize * 4) * self.embeddingSize):
                    self.transformer["layers"][i]["weights"]["feed_forward"]["shrink"].append([random(self.weightsinitrange), 0, 0])
+                   params_done += 1
+                   percent = (params_done * 100) // total_params
+                   if percent >= last_percent + percentagePrintInterval:
+                       last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                       ndprint(f"  Layer {i}: {last_percent}% complete")
                for j in range(self.embeddingSize):
                    self.transformer["layers"][i]["biases"]["feed_forward"]["shrink"].append([random(self.biasesinitrange), 0, 0])
+                   params_done += 1
+                   percent = (params_done * 100) // total_params
+                   if percent >= last_percent + percentagePrintInterval:
+                       last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                       ndprint(f"  Layer {i}: {last_percent}% complete")
                print("Initialized weights and biases for layer", i, "in", timer_end(timer), "ms")
-           print("Initialized layers in", timer_end(gtimer), "ms")
-           
-           print("Initializing embeddings...")
+           ndprint("Initialized layers in", timer_end(gtimer), "ms")
+
+           ndprint("Initializing embeddings...")
            timer = timer_()
            self.transformer["embeddings"] = []
+           params_done = 0
+           total_params = len(self.vocab) * self.embeddingSize
+           last_percent = -percentagePrintInterval  # Start at -percentagePrintInterval to ensure first 0% is printed
+
            for i in range(len(self.vocab)):
                embedding = []
                for j in range(self.embeddingSize):
                    embedding.append([random(self.embeddinginitrange), 0, 0])
+                   params_done += 1
+                   percent = (params_done * 100) // total_params
+                   if percent >= last_percent + percentagePrintInterval:
+                       last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                       ndprint(f"  Embeddings: {last_percent}% complete")
                self.transformer["embeddings"].append(embedding)
-           print("Initialized embeddings in", timer_end(timer), "ms")
+           ndprint("Initialized embeddings in", timer_end(timer), "ms")
 
-           print("Initializing vocabulary projection weights and biases...")
+           ndprint("Initializing vocabulary projection weights and biases...")
            timer = timer_()
            self.transformer["vocab_projection"] = {
                "weights": [],
                "biases": []
            }
+           params_done = 0
+           total_params = len(self.vocab) * self.embeddingSize + len(self.vocab)
+           last_percent = -percentagePrintInterval  # Start at -percentagePrintInterval to ensure first 0% is printed
+           
            # Initialize weights (vocab_size * embedding_size)
            for i in range(len(self.vocab) * self.embeddingSize):
                self.transformer["vocab_projection"]["weights"].append([random(self.weightsinitrange), 0, 0])
+               params_done += 1
+               percent = (params_done * 100) // total_params
+               if percent >= last_percent + percentagePrintInterval:
+                   last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                   ndprint(f"  Vocab projection: {last_percent}% complete")
            # Initialize biases (vocab_size)
            for i in range(len(self.vocab)):
                self.transformer["vocab_projection"]["biases"].append([random(self.biasesinitrange), 0, 0])
-           print("Initialized vocabulary projection weights and biases in", timer_end(timer), "ms")
+               params_done += 1
+               percent = (params_done * 100) // total_params
+               if percent >= last_percent + percentagePrintInterval:
+                   last_percent = (percent // percentagePrintInterval) * percentagePrintInterval
+                   ndprint(f"  Vocab projection: {last_percent}% complete")
+           ndprint("Initialized vocabulary projection weights and biases in", timer_end(timer), "ms")
            ndprint("Successfully initialized model in", timer_end(sgtimer), "ms")
        else:
            ndprint("Reading model from file...")
@@ -653,11 +767,8 @@ class Transformer:
         token_ids = self.encoder.encode(text, allowed_special={'<|endoftext|>'})
         result = []
         for id in token_ids:
-            # Search through vocab for matching id
-            for token in self.vocab:
-                if token[1] == id:
-                    result.append([token[0], id])  # Now returning [token, id] pairs
-                    break
+            token_str = self.id_to_token.get(id, "unknown")
+            result.append([token_str, id])
         print("Tokenized in", timer_end(timer), "ms")
         return result
 
@@ -2226,6 +2337,7 @@ class Transformer:
                         next_token_idx = i
                 
                 next_token = [self.vocab[next_token_idx][0], self.vocab[next_token_idx][1]]
+                ndprint("Inference predicted token:", "\"" + next_token[0] + "\"", "with id", next_token[1])
             else:
                 # Normal temperature-based sampling
                 scaled_scores = [score / temperature for score in scores]
@@ -2243,6 +2355,7 @@ class Transformer:
                         break
                 
                 next_token = [self.vocab[next_token_idx][0], self.vocab[next_token_idx][1]]
+                ndprint("Inference predicted token:", "\"" + next_token[0] + "\"", "with id", next_token[1])
             
             # Check for end token (100257)
             if next_token[1] == 100257:
