@@ -1483,9 +1483,10 @@ class Transformer {
         }
         var layer_gradients = [];
         for (var i = 0; i < this.layersAmount; i++) {
+            // Use each layer's own structure as the template for its gradients
             var layer_grad = {
-                "weights": this.initialize_zero_gradients(this.transformer["layers"][0]["weights"]),
-                "biases": this.initialize_zero_gradients(this.transformer["layers"][0]["biases"])
+                "weights": this.initialize_zero_gradients(this.transformer["layers"][i]["weights"]),
+                "biases": this.initialize_zero_gradients(this.transformer["layers"][i]["biases"])
             };
             layer_gradients.push(layer_grad);
         }

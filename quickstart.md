@@ -39,6 +39,10 @@ Then you can use as you'd use with python:
 ```bash
 node app.js <args like python>
 ```
+If you run into heap errors just add this flag and raise the limit (in mb) as needed:
+```bash
+node --max-old-space-size=8192 app.js <args like python>
+```
 
 ## What each file does
 - app.py: Main code, implementation of the actual transformers.

@@ -1389,10 +1389,10 @@ class Transformer:
         # Initialize gradient accumulators
         embedding_gradients = [[0 for _ in range(self.embeddingSize)] for _ in range(len(input_tokens))]
         layer_gradients = []
-        for _ in range(self.layersAmount):
+        for i in range(self.layersAmount):  # Use 'i' instead of '_' to access the correct layer
             layer_grad = {
-                "weights": self.initialize_zero_gradients(self.transformer["layers"][0]["weights"]),
-                "biases": self.initialize_zero_gradients(self.transformer["layers"][0]["biases"])
+                "weights": self.initialize_zero_gradients(self.transformer["layers"][i]["weights"]),
+                "biases": self.initialize_zero_gradients(self.transformer["layers"][i]["biases"])
             }
             layer_gradients.append(layer_grad)
 
