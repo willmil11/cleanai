@@ -2062,9 +2062,21 @@ class Transformer {
                 token_index = 0;
                 for (var i = 0; i < file_states.length; i++) {
                     if (file_states[i]["loaded"]) {
-                        var oldest_position = file_index * max_tokens_per_file + token_index - this.contextSize;
-                        var file_end_position = i * max_tokens_per_file + file_states[i]["tokens"].length;
-                        if (file_end_position < oldest_position) {
+                        // Compute the global position up to the current token
+                        var current_position = 0;
+                        for (var j = 0; j < file_index; j++) {
+                            current_position += file_states[j]["tokens"].length;
+                        }
+                        current_position += token_index;
+
+                        // Compute the end position of file i
+                        var file_end_position = 0;
+                        for (var j = 0; j <= i; j++) {
+                            file_end_position += file_states[j]["tokens"].length;
+                        }
+
+                        // Unload if window is past this file
+                        if (file_end_position < current_position - this.contextSize) {
                             console.log("[Info] Unloading " + file_states[i]['path'] + " from memory");
                             file_states[i]["loaded"] = false;
                             file_states[i]["tokens"] = [];
