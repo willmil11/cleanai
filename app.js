@@ -1046,123 +1046,138 @@ class Transformer {
         return [0, 0, 0];
     }
     add_in_place(target, source) {
-        if (Array.isArray(target)) {
-            for (let i = 0; i < target.length; i++) {
-                if (Array.isArray(target[i])) {
+        const targetType = typeof target;
+        const sourceType = typeof source;
+        const targetIsArray = Array.isArray(target);
+        const sourceIsArray = Array.isArray(source);
+
+        // --- Mismatch Checks ---
+        if (targetType !== sourceType || targetIsArray !== sourceIsArray || target === null || source === null) {
+            // If one is null and the other isn't, or types mismatch, something is wrong.
+            // Allow null === null case? No, gradients shouldn't be null.
+             if (target === null || source === null) {
+                 console.error("CRITICAL Accumulation Error: Encountered null gradient structure.");
+                 return;
+             }
+             if (targetType !== sourceType || targetIsArray !== sourceIsArray) {
+                console.error("CRITICAL Accumulation Error: Type mismatch between target and source.");
+                console.error(`Target: type=${targetType}, isArray=${targetIsArray}`);
+                console.error(`Source: type=${sourceType}, isArray=${sourceIsArray}`);
+                // Avoid corrupting target, maybe throw error?
+                return;
+             }
+        }
+
+        // --- Processing Logic ---
+        if (targetIsArray) {
+            // Check for leaf node: [grad, m, v]
+            if (target.length === 3 && targetType === 'object' && typeof target[0] === 'number' && // target is array [num, num, num]
+                source.length === 3) { // Source must also be [num, num, num] due to checks above
+                // Accumulate only the gradient component
+                target[0] += source[0];
+                // Do NOT accumulate Adam moments (m, v) across microbatches
+                return; // Leaf node handled
+            } else {
+                // It's an array of structures (e.g., layers, heads)
+                if (target.length !== source.length) {
+                    console.error(`CRITICAL Accumulation Error: Array length mismatch (${target.length} vs ${source.length}).`);
+                    return;
+                }
+                // Recurse into each element
+                for (let i = 0; i < target.length; i++) {
                     this.add_in_place(target[i], source[i]);
-                } else {
-                    target[i] += source[i];
                 }
             }
-        } else if (typeof target === "object") {
-            for (let key in target) {
-                this.add_in_place(target[key], source[key]);
+        } else if (targetType === 'object') { // Already checked target !== null
+            // It's an object (like weights, biases, attention, feed_forward, head)
+            for (const key in target) {
+                // Check if key exists on target AND source before recursing
+                if (Object.hasOwnProperty.call(target, key)) {
+                     if (!Object.hasOwnProperty.call(source, key)) {
+                         console.error(`CRITICAL Accumulation Error: Key "${key}" missing in source gradient object.`);
+                         // If a key is missing in the source, we cannot add, skip it.
+                         // This implies an inconsistency upstream.
+                         continue;
+                     }
+                    this.add_in_place(target[key], source[key]);
+                }
             }
+             // Optional: Check if source has keys not in target?
+             /*
+             for (const key in source) {
+                 if (Object.hasOwnProperty.call(source, key) && !Object.hasOwnProperty.call(target, key)) {
+                     console.warn(`Accumulation Warning: Key "${key}" present in source but not target.`);
+                 }
+             }
+             */
         }
+        // If it's a primitive type (number, string etc.), do nothing - this shouldn't happen
+        // with the expected gradient structure which ends in [num, num, num] arrays.
     }
     apply_gradients(optimizer) {
-        if (!this.accumulated_embedding_grads) {
-            return;
-        }
-        
-        // Extract accumulated gradients
+        if (!this.accumulated_embedding_grads) return; // Nothing to apply
+    
+        console.log("Before gradients:", this.transformer.layers[0].weights.attention.heads[0].query[0][0]);
+    
         var embedding_gradients = this.accumulated_embedding_grads;
         var layer_gradients = this.accumulated_layer_grads;
         var vocab_proj_weight_gradients = this.accumulated_vocab_grads.weights;
         var vocab_proj_bias_gradients = this.accumulated_vocab_grads.biases;
     
-        // Calculate learning rate (same logic as in train_step)
+        // Learning rate scheduling
         var warmup_steps = 100;
         var decay_factor = 0.25;
         var base_lr = this.learningRate;
         var min_lr = 0.0005;
     
-        // Update step number and Adam params
-        if (optimizer === "adam") {
-            this.adam_params['t'] += 1;
-        }
+        if (optimizer === "adam") this.adam_params['t'] += 1;
         this.step_num += 1;
-        
-        // Calculate learning rate
-        var lr;
-        if (this.step_num < warmup_steps) {
-            lr = base_lr * (this.step_num / warmup_steps);
-        } else {
-            lr = base_lr * Math.pow(warmup_steps, 0.5) * Math.pow(this.step_num * decay_factor, -0.5);
-        }
-        
-        // Apply cyclical learning rate adjustment
-        var cycle_length = 50;
-        var cycle_position = this.step_num % cycle_length;
-        var cycle_ratio = cycle_position / cycle_length;
-        var cycle_factor = 1.0;
-        lr = lr * cycle_factor;
-        
-        // Apply minimum learning rate
+    
+        var lr = this.step_num < warmup_steps
+            ? base_lr * (this.step_num / warmup_steps)
+            : base_lr * Math.pow(warmup_steps, 0.5) * Math.pow(this.step_num * decay_factor, -0.5);
+    
         lr = Math.max(min_lr, lr);
-        
-        // Weight decay parameter
-        var weight_decay = 0;  // L2 regularization factor
-        if (config["antiOverfittingOptimisations"]) {
-            weight_decay = 1e-5;
-        }
-        
-        // For SGD with momentum
-        var momentum_factor = 0.5;  // Classic momentum value
+    
+        var weight_decay = config["antiOverfittingOptimisations"] ? 1e-5 : 0;
+        var momentum_factor = 0.5;
+    
         if (optimizer === "sgd_momentum" && this.momentum_initialized === undefined) {
             console.log("Initializing momentum for first use");
             this.momentum_initialized = true;
         }
     
-        // Update embeddings
-        var vocab_indices = {};  // Track which token indices we've updated
-        
-        // FIXED: Process all batches of tokens
+        var vocab_indices = {};
+    
         for (var batch = 0; batch < this.accumulated_token_inputs.length; batch++) {
             var batch_tokens = this.accumulated_token_inputs[batch];
-            
+    
             for (var token_idx = 0; token_idx < batch_tokens.length; token_idx++) {
                 var token = batch_tokens[token_idx][0];
                 var token_id = batch_tokens[token_idx][1];
-                
-                // Find the index in vocabulary
-                var vocab_idx = null;
-                for (var i = 0; i < this.vocab.length; i++) {
-                    if (this.vocab[i][1] === token_id) {
-                        vocab_idx = i;
-                        break;
-                    }
-                }
-                
-                if (vocab_idx !== null) {
+    
+                var vocab_idx = this.vocab.findIndex(([_, id]) => id === token_id);
+    
+                if (vocab_idx !== -1) {
                     vocab_indices[vocab_idx] = true;
                     for (var pos = 0; pos < this.embeddingSize; pos++) {
                         var grad = embedding_gradients[token_idx][pos];
-                        var param = this.transformer["embeddings"][vocab_idx][pos];
-                        
-                        // Get gradient value
-                        var grad_value = (typeof grad === "number") ? grad : (Array.isArray(grad) ? grad[0] : 0);
-                        
-                        // Add weight decay (L2 regularization)
+                        var param = this.transformer.embeddings[vocab_idx][pos];
+    
+                        var grad_value = typeof grad === "number" ? grad : (Array.isArray(grad) ? grad[0] : 0);
                         grad_value += weight_decay * param[0];
-                        
+    
                         if (optimizer === "adam") {
-                            // Adam update
-                            param[1] = this.adam_params['beta1'] * param[1] + (1 - this.adam_params['beta1']) * grad_value;
-                            param[2] = this.adam_params['beta2'] * param[2] + (1 - this.adam_params['beta2']) * (grad_value * grad_value);
-                            
-                            // Compute bias-corrected estimates
-                            var m_hat = param[1] / (1 - Math.pow(this.adam_params['beta1'], this.adam_params['t']));
-                            var v_hat = param[2] / (1 - Math.pow(this.adam_params['beta2'], this.adam_params['t']));
-                            
-                            // Update parameter value
-                            param[0] -= lr * m_hat / (Math.sqrt(v_hat) + this.adam_params['epsilon']);
+                            param[1] = this.adam_params.beta1 * param[1] + (1 - this.adam_params.beta1) * grad_value;
+                            param[2] = this.adam_params.beta2 * param[2] + (1 - this.adam_params.beta2) * grad_value * grad_value;
+    
+                            var m_hat = param[1] / (1 - Math.pow(this.adam_params.beta1, this.adam_params.t));
+                            var v_hat = param[2] / (1 - Math.pow(this.adam_params.beta2, this.adam_params.t));
+                            param[0] -= lr * m_hat / (Math.sqrt(v_hat) + this.adam_params.epsilon);
                         } else if (optimizer === "sgd_momentum") {
-                            // SGD with momentum update
                             param[1] = momentum_factor * param[1] + grad_value;
                             param[0] -= lr * param[1];
                         } else {
-                            // Plain SGD update
                             param[0] -= lr * grad_value;
                         }
                     }
@@ -1170,198 +1185,78 @@ class Transformer {
             }
         }
     
-        // Update layer parameters
+        // === APPLY LAYER GRADIENTS ===
         for (var layer_idx = 0; layer_idx < this.layersAmount; layer_idx++) {
-            var layer = this.transformer["layers"][layer_idx];
+            var layer = this.transformer.layers[layer_idx];
             var layer_grad = layer_gradients[layer_idx];
-            
-            for (var param_type in layer) {
-                if (layer.hasOwnProperty(param_type)) {
-                    for (var key in layer[param_type]) {
-                        if (Array.isArray(layer[param_type][key])) {
-                            for (var i = 0; i < layer[param_type][key].length; i++) {
-                                var grad = layer_grad[param_type][key][i];
-                                var param = layer[param_type][key][i];
-                                
-                                // Get gradient value
-                                var grad_value = (Array.isArray(grad)) ? grad[0] : grad;
-                                
-                                // Add weight decay (L2 regularization)
-                                if (param_type === "weights") {  // Only apply to weights, not biases
-                                    grad_value += weight_decay * param[0];
-                                }
-                                
-                                if (optimizer === "adam") {
-                                    // Adam update
-                                    param[1] = this.adam_params['beta1'] * param[1] + (1 - this.adam_params['beta1']) * grad_value;
-                                    param[2] = this.adam_params['beta2'] * param[2] + (1 - this.adam_params['beta2']) * (grad_value * grad_value);
-                                    
-                                    // Compute bias-corrected estimates
-                                    var m_hat = param[1] / (1 - Math.pow(this.adam_params['beta1'], this.adam_params['t']));
-                                    var v_hat = param[2] / (1 - Math.pow(this.adam_params['beta2'], this.adam_params['t']));
-                                    
-                                    // Update parameter
-                                    param[0] -= lr * m_hat / (Math.sqrt(v_hat) + this.adam_params['epsilon']);
-                                } else if (optimizer === "sgd_momentum") {
-                                    // SGD with momentum update
-                                    param[1] = momentum_factor * param[1] + grad_value;
-                                    param[0] -= lr * param[1];
-                                } else {
-                                    // SGD update
-                                    param[0] -= lr * grad_value;
-                                }
-                            }
-                        } else if (typeof layer[param_type][key] === "object") {  // For nested structures like attention heads
-                            for (var subkey in layer[param_type][key]) {
-                                if (subkey === "heads") {
-                                    // Special handling for attention heads
-                                    for (var head_idx = 0; head_idx < this.heads; head_idx++) {
-                                        for (var head_key of ["query", "key", "value"]) {
-                                            var head_params = layer[param_type][key]["heads"][head_idx][head_key];
-                                            var head_grads = layer_grad[param_type][key]["heads"][head_idx][head_key];
-                                            
-                                            for (var i = 0; i < head_params.length; i++) {
-                                                if (Array.isArray(head_params[i]) && head_params[i].length >= 3) {
-                                                    // Get the gradient
-                                                    var grad_value = Array.isArray(head_grads[i]) ? head_grads[i][0] : head_grads[i];
-                                                    
-                                                    // Add weight decay (L2 regularization)
-                                                    if (param_type === "weights") {  // Only apply to weights, not biases
-                                                        grad_value += weight_decay * head_params[i][0];
-                                                    }
-                                                    
-                                                    if (optimizer === "adam") {
-                                                        // Adam update
-                                                        head_params[i][1] = this.adam_params['beta1'] * head_params[i][1] + (1 - this.adam_params['beta1']) * grad_value;
-                                                        head_params[i][2] = this.adam_params['beta2'] * head_params[i][2] + (1 - this.adam_params['beta2']) * (grad_value * grad_value);
-                                                        
-                                                        // Compute bias-corrected estimates
-                                                        var m_hat = head_params[i][1] / (1 - Math.pow(this.adam_params['beta1'], this.adam_params['t']));
-                                                        var v_hat = head_params[i][2] / (1 - Math.pow(this.adam_params['beta2'], this.adam_params['t']));
-                                                        
-                                                        // Update parameter
-                                                        head_params[i][0] -= lr * m_hat / (Math.sqrt(v_hat) + this.adam_params['epsilon']);
-                                                    } else if (optimizer === "sgd_momentum") {
-                                                        // SGD with momentum update
-                                                        head_params[i][1] = momentum_factor * head_params[i][1] + grad_value;
-                                                        head_params[i][0] -= lr * head_params[i][1];
-                                                    } else {
-                                                        // SGD update
-                                                        head_params[i][0] -= lr * grad_value;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // For other nested dictionaries like "output"
-                                    var nested_params = layer[param_type][key][subkey];
-                                    var nested_grads = layer_grad[param_type][key][subkey];
-                                    
-                                    if (Array.isArray(nested_params) && Array.isArray(nested_grads)) {
-                                        for (var i = 0; i < nested_params.length; i++) {
-                                            if (Array.isArray(nested_params[i]) && nested_params[i].length >= 3) {
-                                                // Get the gradient
-                                                var grad_value = Array.isArray(nested_grads[i]) ? nested_grads[i][0] : nested_grads[i];
-                                                
-                                                // Add weight decay (L2 regularization)
-                                                if (param_type === "weights") {  // Only apply to weights, not biases
-                                                    grad_value += weight_decay * nested_params[i][0];
-                                                }
-                                                
-                                                if (optimizer === "adam") {
-                                                    // Adam update
-                                                    nested_params[i][1] = this.adam_params['beta1'] * nested_params[i][1] + (1 - this.adam_params['beta1']) * grad_value;
-                                                    nested_params[i][2] = this.adam_params['beta2'] * nested_params[i][2] + (1 - this.adam_params['beta2']) * (grad_value * grad_value);
-                                                    
-                                                    // Compute bias-corrected estimates
-                                                    var m_hat = nested_params[i][1] / (1 - Math.pow(this.adam_params['beta1'], this.adam_params['t']));
-                                                    var v_hat = nested_params[i][2] / (1 - Math.pow(this.adam_params['beta2'], this.adam_params['t']));
-                                                    
-                                                    // Update parameter
-                                                    nested_params[i][0] -= lr * m_hat / (Math.sqrt(v_hat) + this.adam_params['epsilon']);
-                                                } else if (optimizer === "sgd_momentum") {
-                                                    // SGD with momentum update
-                                                    nested_params[i][1] = momentum_factor * nested_params[i][1] + grad_value;
-                                                    nested_params[i][0] -= lr * nested_params[i][1];
-                                                } else {
-                                                    // SGD update
-                                                    nested_params[i][0] -= lr * grad_value;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+    
+            for (var param_type of ["weights", "biases"]) {
+                this.updateParamArray(layer[param_type]["normalize_1"], layer_grad[param_type]["normalize_1"], optimizer, lr, weight_decay, momentum_factor, param_type === "weights");
+                this.updateParamArray(layer[param_type]["normalize_2"], layer_grad[param_type]["normalize_2"], optimizer, lr, weight_decay, momentum_factor, param_type === "weights");
+    
+                for (var head_idx = 0; head_idx < this.heads; head_idx++) {
+                    this.updateParamArray(layer[param_type].attention.heads[head_idx].query, layer_grad[param_type].attention.heads[head_idx].query, optimizer, lr, weight_decay, momentum_factor, param_type === "weights");
+                    this.updateParamArray(layer[param_type].attention.heads[head_idx].key,   layer_grad[param_type].attention.heads[head_idx].key,   optimizer, lr, weight_decay, momentum_factor, param_type === "weights");
+                    this.updateParamArray(layer[param_type].attention.heads[head_idx].value, layer_grad[param_type].attention.heads[head_idx].value, optimizer, lr, weight_decay, momentum_factor, param_type === "weights");
                 }
+    
+                this.updateParamArray(layer[param_type].attention.output,      layer_grad[param_type].attention.output,      optimizer, lr, weight_decay, momentum_factor, param_type === "weights");
+                this.updateParamArray(layer[param_type].feed_forward.grow,     layer_grad[param_type].feed_forward.grow,     optimizer, lr, weight_decay, momentum_factor, param_type === "weights");
+                this.updateParamArray(layer[param_type].feed_forward.shrink,   layer_grad[param_type].feed_forward.shrink,   optimizer, lr, weight_decay, momentum_factor, param_type === "weights");
             }
         }
     
-        // Update vocabulary projection parameters
-        // Update weights
-        for (var i = 0; i < this.transformer["vocab_projection"]["weights"].length; i++) {
-            var param = this.transformer["vocab_projection"]["weights"][i];
-            var grad_value = vocab_proj_weight_gradients[i][0];
-            
-            // Add weight decay (L2 regularization)
-            grad_value += weight_decay * param[0];
-            
-            if (optimizer === "adam") {
-                // Adam update
-                param[1] = this.adam_params['beta1'] * param[1] + (1 - this.adam_params['beta1']) * grad_value;
-                param[2] = this.adam_params['beta2'] * param[2] + (1 - this.adam_params['beta2']) * (grad_value * grad_value);
-                
-                // Compute bias-corrected estimates
-                var m_hat = param[1] / (1 - Math.pow(this.adam_params['beta1'], this.adam_params['t']));
-                var v_hat = param[2] / (1 - Math.pow(this.adam_params['beta2'], this.adam_params['t']));
-                
-                // Update parameter
-                param[0] -= lr * m_hat / (Math.sqrt(v_hat) + this.adam_params['epsilon']);
-            } else if (optimizer === "sgd_momentum") {
-                // SGD with momentum update
-                param[1] = momentum_factor * param[1] + grad_value;
-                param[0] -= lr * param[1];
-            } else {
-                // SGD update
-                param[0] -= lr * grad_value;
-            }
-        }
+        // === VOCAB PROJECTION ===
+        this.updateParamArray(this.transformer.vocab_projection.weights, vocab_proj_weight_gradients, optimizer, lr, weight_decay, momentum_factor, true);
+        this.updateParamArray(this.transformer.vocab_projection.biases,  vocab_proj_bias_gradients,   optimizer, lr, weight_decay, momentum_factor, false);
     
-        // Update biases
-        for (var i = 0; i < this.transformer["vocab_projection"]["biases"].length; i++) {
-            var param = this.transformer["vocab_projection"]["biases"][i];
-            var grad_value = vocab_proj_bias_gradients[i][0];
-            
-            if (optimizer === "adam") {
-                // Adam update
-                param[1] = this.adam_params['beta1'] * param[1] + (1 - this.adam_params['beta1']) * grad_value;
-                param[2] = this.adam_params['beta2'] * param[2] + (1 - this.adam_params['beta2']) * (grad_value * grad_value);
-                
-                // Compute bias-corrected estimates
-                var m_hat = param[1] / (1 - Math.pow(this.adam_params['beta1'], this.adam_params['t']));
-                var v_hat = param[2] / (1 - Math.pow(this.adam_params['beta2'], this.adam_params['t']));
-                
-                // Update parameter
-                param[0] -= lr * m_hat / (Math.sqrt(v_hat) + this.adam_params['epsilon']);
-            } else if (optimizer === "sgd_momentum") {
-                // SGD with momentum update
-                param[1] = momentum_factor * param[1] + grad_value;
-                param[0] -= lr * param[1];
-            } else {
-                // SGD update
-                param[0] -= lr * grad_value;
-            }
-        }
-    
-        // Clear accumulated gradients after updating
+        // === Clear Accumulated ===
         this.accumulated_embedding_grads = null;
         this.accumulated_layer_grads = null;
         this.accumulated_vocab_grads = null;
-        this.accumulated_token_inputs = null;  // Also clear the token inputs used for embedding lookups
-        
+        this.accumulated_token_inputs = null;
+    
+        // DEBUG OUTPUTS
+        console.log("After gradients:", this.transformer.layers[0].weights.attention.heads[0].query[0][0]);
+        console.log("Accumulated gradient:", layer_gradients[0].weights.attention.heads[0].query[0][0]);
         ndprint("Microbatch gradients applied.");
+    }    
+    
+    // Add this helper method to your Transformer class:
+    updateParamArray(params, grads, optimizer, lr, weight_decay, momentum_factor, apply_weight_decay) {
+        if (!params || !grads || params.length !== grads.length) {
+            return; // Skip if arrays don't exist or don't match
+        }
+        
+        for (var i = 0; i < params.length; i++) {
+            var param = params[i];
+            var grad_value = Array.isArray(grads[i]) ? grads[i][0] : grads[i];
+            
+            // Add weight decay if applicable
+            if (apply_weight_decay) {
+                grad_value += weight_decay * param[0];
+            }
+            
+            if (optimizer === "adam") {
+                // Adam update
+                param[1] = this.adam_params['beta1'] * param[1] + (1 - this.adam_params['beta1']) * grad_value;
+                param[2] = this.adam_params['beta2'] * param[2] + (1 - this.adam_params['beta2']) * (grad_value * grad_value);
+                
+                // Compute bias-corrected estimates
+                var m_hat = param[1] / (1 - Math.pow(this.adam_params['beta1'], this.adam_params['t']));
+                var v_hat = param[2] / (1 - Math.pow(this.adam_params['beta2'], this.adam_params['t']));
+                
+                // Update parameter
+                param[0] -= lr * m_hat / (Math.sqrt(v_hat) + this.adam_params['epsilon']);
+            } else if (optimizer === "sgd_momentum") {
+                // SGD with momentum update
+                param[1] = momentum_factor * param[1] + grad_value;
+                param[0] -= lr * param[1];
+            } else {
+                // SGD update
+                param[0] -= lr * grad_value;
+            }
+        }
     }
     train_step(input_tokens, target_token, optimizer="sgd", training_mode=true, accumulate=false) {
         if (optimizer === undefined) { optimizer = "sgd"; }
