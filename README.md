@@ -24,11 +24,10 @@ are you?? how how how how are?? are you
 As you can see the response is not as good but it still kind of captures the pattern.
 <br>
 <br>
-<strong>Important note:</strong> Here the training was slow and resulted in a not very good model because of the simplified layer normalization implementation which will be fixed in upcoming updates.
+<strong>Important note:</strong> Here the training was slow and resulted in a not very good model because of the simplified layer normalization implementation which has been fixed, a new more accurate example will be added in the near future.
 
 ## What's gonna be in future updates?
 Here's a small list of things I'll add:
-- Fix layer normalization, for now its simplified which is what makes models trained with this stupid for now.
 - Add multicore support
 - Add gpu support (eventually but not for now because this is very hard)
 
