@@ -1,12 +1,12 @@
 # Cleanai
 ## What is this?
-This is a project of mine that as of 26.03.2025 I've been working on for about 3 months. This is a transformer architecture with pre-training and training implemented in pure python. It only requires tiktoken for tokenization and inputimeout for the interactive console mode as you can see in requirements.txt, not even numpy. Only pure raw python no abstractions. You can see the <a href="./quickstart.md">quickstart</a>
+This is a project of mine that as of 18.04.2025 I've been working on for about 4 months. This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization and readline for the interactive console mode as you can see in package.json. Only pure raw javascript and no abstractions. You can see the <a href="./quickstart.md">quickstart</a>
 
 ## Why?
-I wanted to see how this actually works therfore I decided to put Claude and Chatgpt to work to teach me how all of this works, I also used them to implement some parts of the code like training but I generally understand how it works now. Because this works and this is really cool I am releasing it on github publicly :)
+I wanted to see how this actually works therfore I decided to put Claude, Chatgpt and Gemini to work to teach me how all of this works, I also used them to implement some parts of the code like training, pre-training and other stuff but I generally understand how it works now. Because this works and this is really cool I am releasing it on github publicly :)
 
 ## Can I use this to train my AI?
-Absolutely, however you won't get the same kind of speeds as you would get with pytorch or tensorflow, see this is pure single threaded python running on CPU. But it will absolutely train the model correctly and run it correctly.
+Absolutely, however you won't get the same kind of speeds as you would get with pytorch or tensorflow, see this is pure single threaded javascript running on CPU. But it will absolutely train the model correctly and run it correctly.
 
 ## Did you test this?
 I did not test pre-training yet, but I tested just training on the dataset.json that's currently there which is a 10 example greetings dataset. And got decent results after about 200 epochs which was 0.8 loss, the loss will go down very fast at first then very slowly. what might take 2-3 epochs at the start might take 200 later on. Depending on the temperature (closer to 0 is more determinitic) the model gave responses to dataset inputs that were not exactly what was expected but outputs that showed that it was learning like:
@@ -22,9 +22,15 @@ Currently, at 0.8 loss, the model can even slightly infer when a query is not ex
 are you?? how how how how are?? are you
 ```
 As you can see the response is not as good but it still kind of captures the pattern.
+<br>
+<br>
+<strong>Important note:</strong> Here the training was slow and resulted in a not very good model because of the simplified layer normalization implementation which will be fixed in upcoming updates.
 
 ## What's gonna be in future updates?
-I'm still not sure of that, but I may convert the code to javascript to be able to run it with nodejs which would make it MUCH faster.
+Here's a small list of things I'll add:
+- Fix layer normalization, for now its simplified which is what makes models trained with this stupid for now.
+- Add multicore support
+- Add gpu support (eventually but not for now because this is very hard)
 
 ## How to support the project?
 To support this project you can star the repo and you can send me suggestions through discord (willmil11) or email (willmil111012@gmail.com). Please don't create pull requests as this is a project of mine to learn I therefore want to code and implement everything myself, even if your suggestions are welcome, I want to implement them myself.
