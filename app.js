@@ -1210,6 +1210,15 @@ class Transformer {
         this.updateParamArray(this.transformer.vocab_projection.weights, vocab_proj_weight_gradients, optimizer, lr, weight_decay, momentum_factor, true);
         this.updateParamArray(this.transformer.vocab_projection.biases,  vocab_proj_bias_gradients,   optimizer, lr, weight_decay, momentum_factor, false);
     
+        for (let i = 0; i < this.accumulated_token_inputs.length; i++) {
+            for (let j = 0; j < this.accumulated_token_inputs[i].length; j++) {
+                this.accumulated_token_inputs[i][j][0] = null; // token text or object
+                this.accumulated_token_inputs[i][j][1] = null; // token ID
+                this.accumulated_token_inputs[i][j] = null;
+            }
+            this.accumulated_token_inputs[i] = null;
+        }
+
         // === Clear Accumulated ===
         this.accumulated_embedding_grads = null;
         this.accumulated_layer_grads = null;
@@ -1220,7 +1229,18 @@ class Transformer {
         console.log("After gradients:", this.transformer.layers[0].weights.attention.heads[0].query[0][0]);
         console.log("Accumulated gradient:", layer_gradients[0].weights.attention.heads[0].query[0][0]);
         ndprint("Microbatch gradients applied.");
-    }    
+
+        if (global.gc) {
+            console.log(`Heap used before GC: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`);
+            global.gc();
+            setImmediate(() => {
+                global.gc();
+                console.log(`Heap used after GC (post setImmediate): ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`);
+            });
+        } else {
+            console.warn("GC not exposed! Run with: node --expose-gc app.js");
+        }        
+    }
     
     // Add this helper method to your Transformer class:
     updateParamArray(params, grads, optimizer, lr, weight_decay, momentum_factor, apply_weight_decay) {
@@ -1544,19 +1564,34 @@ class Transformer {
                     weights: vocab_proj_weight_gradients,
                     biases: vocab_proj_bias_gradients
                 };
-                // FIXED: Store all input tokens not just overwrite
                 this.accumulated_token_inputs = [input_tokens]; 
             } else {
                 this.add_in_place(this.accumulated_embedding_grads, embedding_gradients);
                 this.add_in_place(this.accumulated_layer_grads, layer_gradients);
                 this.add_in_place(this.accumulated_vocab_grads.weights, vocab_proj_weight_gradients);
                 this.add_in_place(this.accumulated_vocab_grads.biases, vocab_proj_bias_gradients);
-                // FIXED: Track each batch's tokens
                 this.accumulated_token_inputs.push(input_tokens);
             }
+        
+            // FLUSH IF MICRO-BATCH COMPLETE
+            if (this.accumulated_token_inputs.length >= config.microbatchSize) {
+                this.apply_gradients(optimizer);
+            }
+        
             ndprint("Gradients accumulated, delaying parameter update.");
             return initial_loss;
-        }
+        } else {
+            // NOT accumulating? Flush immediately.
+            this.accumulated_embedding_grads = embedding_gradients;
+            this.accumulated_layer_grads = layer_gradients;
+            this.accumulated_vocab_grads = {
+                weights: vocab_proj_weight_gradients,
+                biases: vocab_proj_bias_gradients
+            };
+            this.accumulated_token_inputs = [input_tokens];
+            this.apply_gradients(optimizer);
+            return initial_loss;
+        }        
     
         // Update your parameters as usual here (unchanged from your original logic):
         console.log("Updating parameters...");
@@ -1736,7 +1771,7 @@ class Transformer {
         } else {
             console.log("Using SGD - no momentum/velocity values to report");
         }
-        
+
         ndprint("Training step completed in", timer_end(gtimer), "ms");
         return initial_loss;
     }
@@ -1874,7 +1909,8 @@ class Transformer {
                     var input_tokens = tokens.slice(0, j + 1);
                     var target_token = tokens[j + 1];
                     if (j < token_mask.length && token_mask[j]) {
-                        var loss = this.train_step(input_tokens, target_token, optimizer, true);                
+                        var loss = this.train_step(input_tokens, target_token, optimizer, true);
+                        if (!accumulate) this.microbatchCounter = 0;
                         dataset_total_loss += loss;
                         sequence_positions += 1;
                         processed_io_pairs += 1;
@@ -2020,27 +2056,30 @@ class Transformer {
                 while (token_index + this.contextSize < tokens.length) {
                     var input_tokens = tokens.slice(token_index, token_index + this.contextSize);
                     var target_token = tokens[token_index + this.contextSize];
-        
+                
                     microbatch.push([input_tokens, target_token]);
-        
-                    if (microbatch.length === config["microbatchSize"]) {
+                
+                    if (microbatch.length >= config["microbatchSize"]) {
                         var total_loss = 0.0;
-        
-                        for (var [input, target] of microbatch) {
-                            var loss = this.train_step(input, target, optimizer, true, true);  // true = accumulate
+                
+                        for (var i = 0; i < microbatch.length; i++) {
+                            var [input, target] = microbatch[i];
+                            var isLast = i === microbatch.length - 1;
+                
+                            // training_mode = true, accumulate = !isLast
+                            var loss = this.train_step(input, target, optimizer, true, !isLast);
                             total_loss += loss;
                         }
-        
-                        this.apply_gradients(optimizer);  // apply once
-                        microbatch = [];
-        
+                
+                        microbatch = []; // reset after flush
+                
                         var avg_loss = total_loss / config["microbatchSize"];
                         epoch_losses.push(avg_loss);
                         ndprint("Microbatch loss: " + avg_loss.toFixed(4));
                     }
-        
+                
                     token_index += this.contextSize;
-                }
+                }                
         
                 // FIXED: Process any remaining samples in microbatch
                 if (microbatch.length > 0) {
