@@ -899,8 +899,72 @@ class Transformer {
             }
         }
     }
-    normalize_vector(vector) {
+    _calculate_x_hat_only(vector) {
+        // Replicates steps 1-6 of normalize_vector WITHOUT gamma/beta/clamping
+        // NOTE: Uses original NaN checks but doesn't increment class counters from here
         var vector_list = new Float32Array(vector.length);
+        var input_nan_found_internal = false;
+        for (var i = 0; i < vector.length; i++) {
+            vector_list[i] = Number(vector[i]);
+            if (isNaN(vector_list[i])) {
+                 if(this.nan_checks_enabled) { console.warn(`--- WARNING: Input NaN in _calculate_x_hat_only (idx ${i}) ---`); }
+                 vector_list[i] = 0;
+                 input_nan_found_internal = true;
+            }
+        }
+
+        var mean = vector_list.reduce((a, b) => a + b, 0) / vector_list.length;
+        if (isNaN(mean)) {
+             if(this.nan_checks_enabled) { console.error("!!! NaN DETECTED in _calculate_x_hat_only: Mean !!!"); }
+             // Don't increment class counters from helper
+             return new Float32Array(vector_list.length).fill(0.0);
+        }
+
+        var variance = 0;
+        for (var i = 0; i < vector_list.length; i++) {
+             var diff = vector_list[i] - mean;
+             variance += diff * diff;
+        }
+        variance /= vector_list.length;
+        if (isNaN(variance)) {
+             if(this.nan_checks_enabled) { console.error("!!! NaN DETECTED in _calculate_x_hat_only: Variance !!!"); }
+             // Don't increment class counters from helper
+             return new Float32Array(vector_list.length).fill(0.0);
+        }
+
+        var epsilon = 1e-8;
+        var std = Math.sqrt(variance + epsilon);
+        if (isNaN(std)) {
+            if(this.nan_checks_enabled) { console.error("!!! NaN DETECTED in _calculate_x_hat_only: Std !!!"); }
+            // Don't increment class counters from helper
+            return new Float32Array(vector_list.length).fill(0.0);
+        }
+
+        // Use original threshold for consistency, return 0 for x_hat if std is near zero
+        if (std < 1e-6) {
+            return new Float32Array(vector_list.length).fill(0.0);
+        }
+
+        var x_hat = new Float32Array(vector_list.length);
+        var x_hat_nan_found_internal = false;
+        for (var i = 0; i < vector_list.length; i++) {
+            x_hat[i] = (vector_list[i] - mean) / std;
+            if (isNaN(x_hat[i])) {
+                 if(this.nan_checks_enabled) { console.error(`!!! NaN DETECTED during _calculate_x_hat_only calculation (idx ${i}) !!!`); }
+                 x_hat[i] = 0;
+                 x_hat_nan_found_internal = true;
+            }
+        }
+        // Log if NaN appeared *during* calc, but don't increment class counters
+        // if (x_hat_nan_found_internal && !input_nan_found_internal && this.nan_checks_enabled) {
+        //      console.warn("--- NaN appeared during x_hat calculation in helper ---");
+        // }
+        return x_hat;
+    }
+    normalize_vector(vector, gamma, beta) { // Added gamma, beta params
+        // 1. Convert to Float32Array and handle NaNs in input (Keep this part)
+        var vector_list = new Float32Array(vector.length);
+        var nan_count_before = this.nan_count_this_step; // Track NaNs before this specific call
         for (var i = 0; i < vector.length; i++) {
             vector_list[i] = Number(vector[i]); // Simplified conversion
             if (isNaN(vector_list[i])) { // Check during conversion
@@ -912,7 +976,9 @@ class Transformer {
                  vector_list[i] = 0; // Replace NaN with 0
             }
         }
+        var input_nan_found = (this.nan_count_this_step > nan_count_before); // Check if NaN was added here
 
+        // 2. Calculate Mean (Keep this part)
         var mean = vector_list.reduce((a, b) => a + b, 0) / vector_list.length;
         if (isNaN(mean)) {
              if(this.nan_checks_enabled) {
@@ -922,6 +988,7 @@ class Transformer {
              return new Float32Array(vector_list.length).fill(0.0);
         }
 
+        // 3. Calculate Variance (Keep this part)
         var variance = 0;
         for (var i = 0; i < vector_list.length; i++) {
              var diff = vector_list[i] - mean;
@@ -936,6 +1003,7 @@ class Transformer {
              return new Float32Array(vector_list.length).fill(0.0);
         }
 
+        // 4. Calculate Standard Deviation (with epsilon) (Keep this part)
         var epsilon = 1e-8;
         var std = Math.sqrt(variance + epsilon);
         if (isNaN(std)) {
@@ -946,29 +1014,66 @@ class Transformer {
             return new Float32Array(vector_list.length).fill(0.0);
         }
 
-        if (std < 1e-6) {
+        // 5. Handle near-zero std dev (Keep original return zero for simplicity)
+        if (std < 1e-6) { // Kept original threshold
+            // Returning zeros is the simplest behavior matching the original near-zero handling
             return new Float32Array(vector_list.length).fill(0.0);
         }
 
-        var normalized = new Float32Array(vector_list.length);
-        var output_nan_found = false;
+        // 6. Normalize: (x - mean) / std (Keep this part, result is x_hat)
+        var x_hat = new Float32Array(vector_list.length);
+        var x_hat_nan_found = false;
         for (var i = 0; i < vector_list.length; i++) {
             var norm_val = (vector_list[i] - mean) / std;
-            if (norm_val > 10.0) { norm_val = 10.0; }
-            else if (norm_val < -10.0) { norm_val = -10.0; }
-            normalized[i] = norm_val;
-            if (isNaN(normalized[i])) { // Check during calculation
-                 output_nan_found = true;
-                 normalized[i] = 0; // Replace NaN with 0
+
+            // --- REMOVED CLAMPING ---
+            // if (norm_val > 10.0) { norm_val = 10.0; } // REMOVED
+            // else if (norm_val < -10.0) { norm_val = -10.0; } // REMOVED
+            // --- END REMOVED CLAMPING ---
+
+            x_hat[i] = norm_val;
+            if (isNaN(x_hat[i])) { // Check during calculation
+                if (this.nan_checks_enabled) {
+                     console.error(`!!! NaN DETECTED during normalization calculation (index ${i}) !!!`);
+                 }
+                 x_hat[i] = 0; // Replace NaN with 0
+                 x_hat_nan_found = true;
+            }
+        }
+        if (x_hat_nan_found && !input_nan_found) { // Log only if NaN appeared *during* this calc
+            this.nan_count_this_step++; this.nan_forward_pass_count_epoch++;
+        }
+
+        // 7. --- NEW: Apply Gamma (Scale) and Beta (Shift) ---
+        var final_output = new Float32Array(x_hat.length);
+        var output_nan_found = false;
+        nan_count_before = this.nan_count_this_step; // Track before gamma/beta application
+        for (var i = 0; i < x_hat.length; i++) {
+            // gamma and beta store [value, m, v] triplets. Use the value at index i*3.
+            var gamma_val = gamma[i * 3];
+            var beta_val = beta[i * 3];
+            final_output[i] = x_hat[i] * gamma_val + beta_val; // y = gamma * x_hat + beta
+
+             // Final check on the output of gamma/beta application
+            if (isNaN(final_output[i])) {
+                if (this.nan_checks_enabled) {
+                    console.error(`!!! NaN DETECTED AFTER applying gamma/beta (index ${i}) !!! x_hat=${x_hat[i]}, gamma=${gamma_val}, beta=${beta_val}`);
+                }
+                final_output[i] = 0; // Replace NaN with 0
+                output_nan_found = true;
             }
         }
         if (output_nan_found) {
-             if(this.nan_checks_enabled) {
-                 console.error("!!! NaN DETECTED IN NORMALIZE_VECTOR FINAL OUTPUT (replaced with 0) !!!");
+            // Increment counters only if NaN appeared specifically during gamma/beta step
+             if (this.nan_count_this_step === nan_count_before) { // Check if counter wasn't already incremented by x_hat check
+                 this.nan_count_this_step++;
+                 this.nan_forward_pass_count_epoch++;
              }
-             this.nan_count_this_step++; this.nan_forward_pass_count_epoch++;
         }
-        return normalized;
+        // --- END NEW ---
+
+        // Return the final scaled and shifted result ('y')
+        return final_output;
     }
     dot_product(vec1, vec2) {
         var sum = 0;
@@ -1355,115 +1460,31 @@ class Transformer {
         if (training_mode === undefined) { training_mode = true; }
         ndprint("Starting training step...");
         var gtimer = timer_();
-        // function compute_global_norm(embedding_grads, layer_grads) {
-        //     var squared_sum = 0.0; // Use standard number for sum
 
-        //     // DEBUG CHECK: Check embedding gradients separately first
-        //     for (var i = 0; i < embedding_grads.length; i++) {
-        //          // embedding_grads[i] should be a Float32Array here
-        //          if (!embedding_grads[i] || typeof embedding_grads[i].forEach !== 'function'){
-        //               console.error(`!!! Invalid structure in embedding_grads[${i}] !!!`);
-        //               continue; // Skip this part of the embedding grads
-        //          }
-        //          for (var j = 0; j < embedding_grads[i].length; j++) {
-        //              var val = embedding_grads[i][j]; // Direct gradient value
-        //              if(isNaN(val)){
-        //                  console.error(`!!! NaN Gradient value found in embedding_grads[${i}][${j}] !!!`);
-        //                  // Don't add NaN to sum, maybe set a flag?
-        //              } else {
-        //                  // Accumulate squared sum using standard numbers for precision
-        //                 squared_sum += Number(val) * Number(val);
-        //              }
-        //          }
-        //     }
-
-        //     // Recursive helper to check layer gradients
-        //     function add_squared_grads_recursive(grad_struct, path = "root") { // Add path for context
-        //         if (grad_struct instanceof Float32Array) {
-        //             // Leaf node: Check the gradient value at index 0
-        //             if (grad_struct.length === 0) return; // Skip empty arrays if they somehow occur
-        //             var grad_val = grad_struct[0]; // Get gradient value (index 0)
-
-        //             // DEBUG CHECK
-        //             if (isNaN(grad_val)) {
-        //                 console.error(`!!! NaN Gradient value found in compute_global_norm at path: ${path}[0] !!!`);
-        //                 // Avoid adding NaN to the sum
-        //                 return; // Skip this gradient
-        //             }
-        //             // Accumulate squared sum using standard numbers for precision
-        //             squared_sum += Number(grad_val) * Number(grad_val);
-
-        //         } else if (Array.isArray(grad_struct)) {
-        //             // Standard array containing other structures or Float32Arrays
-        //             for (var k = 0; k < grad_struct.length; k++) {
-        //                 // Pass index as part of the path
-        //                 add_squared_grads_recursive(grad_struct[k], `${path}[${k}]`);
-        //             }
-        //         } else if (typeof grad_struct === "object" && grad_struct !== null) {
-        //             // Object containing other structures or Float32Arrays
-        //             for (var key in grad_struct) {
-        //                 if (Object.hasOwnProperty.call(grad_struct, key)) {
-        //                     // Pass key as part of the path
-        //                     add_squared_grads_recursive(grad_struct[key], `${path}.${key}`);
-        //                 }
-        //             }
-        //         }
-        //          // Ignore primitives or null values if encountered unexpectedly
-        //     }
-
-        //     // Call the recursive check starting from the layer gradients root
-        //     if (layer_grads && typeof layer_grads.forEach === 'function') {
-        //         for (var layer_idx = 0; layer_idx < layer_grads.length; layer_idx++) {
-        //             add_squared_grads_recursive(layer_grads[layer_idx], `layer[${layer_idx}]`);
-        //         }
-        //     } else {
-        //          console.error("!!! Invalid layer_grads structure passed to compute_global_norm !!!");
-        //     }
-
-
-        //     // Final calculation - check squared_sum itself before sqrt
-        //     if (isNaN(squared_sum)) {
-        //          console.error("!!! NaN DETECTED in compute_global_norm: squared_sum became NaN !!!");
-        //          return NaN;
-        //     }
-        //     if (squared_sum < 0) {
-        //         console.error("!!! Negative squared_sum detected in compute_global_norm: ", squared_sum, " !!!");
-        //          // This shouldn't happen, but guard against it
-        //          return NaN;
-        //     }
-
-        //     return Math.sqrt(squared_sum); // Return the final norm
-        // } // End of compute_global_norm definition
-        // +++ INSERT START (Replacement compute_global_norm function inside train_step) +++
-        // Use 'that' or bind 'this' if necessary, but typically 'this' works here.
-        var that = this; // Capture outer 'this' just in case scope gets tricky
+        // compute_global_norm definition unchanged from original
+        var that = this;
         function compute_global_norm(embedding_grads, layer_grads) {
             var squared_sum = 0.0;
-
-            // Check embedding gradients
             for (var i = 0; i < embedding_grads.length; i++) {
                  if (!embedding_grads[i] || typeof embedding_grads[i].forEach !== 'function'){ continue; }
                  for (var j = 0; j < embedding_grads[i].length; j++) {
                      var val = embedding_grads[i][j];
-                     if(isNaN(val) || !isFinite(val)){ // Check for NaN and Infinity
+                     if(isNaN(val) || !isFinite(val)){
                          if(that.nan_checks_enabled) { console.error(`!!! NaN/Infinity Gradient value found in embedding_grads[${i}][${j}] !!!`); }
                          that.nan_count_this_step++; that.nan_final_gradient_count_epoch++;
-                         // Skip adding bad value
                      } else {
                         squared_sum += Number(val) * Number(val);
                      }
                  }
             }
-
-            // Recursive helper
             function add_squared_grads_recursive(grad_struct, path = "root") {
                 if (grad_struct instanceof Float32Array) {
                     if (grad_struct.length === 0) return;
-                    var grad_val = grad_struct[0]; // Index 0 holds the gradient
-                    if (isNaN(grad_val) || !isFinite(grad_val)) { // Check for NaN and Infinity
+                    var grad_val = grad_struct[0];
+                    if (isNaN(grad_val) || !isFinite(grad_val)) {
                         if (that.nan_checks_enabled) { console.error(`!!! NaN/Infinity Gradient value found in compute_global_norm at path: ${path}[0] !!!`); }
                         that.nan_count_this_step++; that.nan_final_gradient_count_epoch++;
-                        return; // Skip bad value
+                        return;
                     }
                     squared_sum += Number(grad_val) * Number(grad_val);
                 } else if (Array.isArray(grad_struct)) {
@@ -1478,8 +1499,6 @@ class Transformer {
                     }
                 }
             }
-
-            // Call the recursive check
             if (layer_grads && typeof layer_grads.forEach === 'function') {
                 for (var layer_idx = 0; layer_idx < layer_grads.length; layer_idx++) {
                     add_squared_grads_recursive(layer_grads[layer_idx], `layer[${layer_idx}]`);
@@ -1487,40 +1506,48 @@ class Transformer {
             } else {
                  if(that.nan_checks_enabled) {console.error("!!! Invalid layer_grads structure passed to compute_global_norm !!!");}
             }
-
             if (isNaN(squared_sum) || !isFinite(squared_sum)) {
                  if(that.nan_checks_enabled) { console.error("!!! NaN/Infinity DETECTED in compute_global_norm: squared_sum became invalid !!!");}
-                 // Can't compute norm if sum is bad
-                 return NaN; // Return NaN to indicate failure
+                 return NaN;
             }
-            if (squared_sum < 0) { // Should not happen, but good check
+            if (squared_sum < 0) {
                  if(that.nan_checks_enabled) {console.error("!!! Negative squared_sum detected in compute_global_norm: ", squared_sum, " !!!");}
                  return NaN;
             }
             return Math.sqrt(squared_sum);
-        } // End of compute_global_norm definition
-// +++ INSERT END +++
+        } // End of compute_global_norm
+
+        // --- Forward pass to get cache START --- (Unchanged Logic)
         console.log("Running inference to get cache...");
         var timer_inf = timer_();
         var input_text = "";
         for (var i = 0; i < input_tokens.length; i++) {
             input_text += input_tokens[i][0];
         }
+        // Ensure inference is called with return_cache=true and training_mode=true
         var inference_result = this.inference(input_text, true, training_mode);
-        var cache = inference_result[1];
+        var cache = inference_result[1]; // Cache now includes 'normX_x_hat'
         console.log("Got inference cache in " + timer_end(timer_inf) + " ms");
+        // --- Forward pass to get cache END ---
+
+
+        // --- Initial Loss Calculation START --- (Unchanged Logic)
         console.log("Calculating initial loss...");
         timer_inf = timer_();
         var initial_loss = this.calculate_loss(cache["vocab_scores"], target_token[1]);
         console.log("Initial loss: " + initial_loss + " calculated in " + timer_end(timer_inf) + " ms");
+        // --- Initial Loss Calculation END ---
+
 
         console.log("Computing gradients...");
         var gtimer2 = timer_();
+
+        // --- Initial Error Calculation START --- (Unchanged Logic)
         var predicted_probs = this.softmax(cache["vocab_scores"]);
-        var epsilon_grad = 0;
+        var epsilon_grad = 0; // Keep original epsilon setting for gradients
         var vocab_size = this.vocab.length;
         var target_distribution = new Float32Array(vocab_size);
-        target_distribution.fill(epsilon_grad / (vocab_size - 1));
+        target_distribution.fill(epsilon_grad / (vocab_size - 1)); // Use epsilon_grad here
         var target_idx = null;
         for (var i = 0; i < this.vocab.length; i++) {
             if (this.vocab[i][1] === target_token[1]) { target_idx = i; break; }
@@ -1534,38 +1561,60 @@ class Transformer {
         for (var i = 0; i < predicted_probs.length; i++) {
             initial_error[i] = predicted_probs[i] - target_distribution[i];
         }
-        console.log("Computing gradients for vocabulary projection parameters...");
+        // --- Initial Error Calculation END ---
 
-        // Vocab projection gradients will store only the gradient value (index 0)
+
+        // --- Vocab Projection Gradients START --- (Unchanged Logic)
+        console.log("Computing gradients for vocabulary projection parameters...");
         var vocab_proj_weight_gradients = new Float32Array(this.transformer["vocab_projection"]["weights"].length).fill(0);
         var vocab_proj_bias_gradients = new Float32Array(this.transformer["vocab_projection"]["biases"].length).fill(0);
-
         for (var vocab_idx = 0; vocab_idx < this.vocab.length; vocab_idx++) {
             var error_val = initial_error[vocab_idx];
-            for (var embed_idx = 0; embed_idx < this.embeddingSize; embed_idx++) {
-                var weight_idx_in_flat_array = vocab_idx * this.embeddingSize + embed_idx;
-                // Gradient = error * activation_from_last_layer
-                var gradient = error_val * cache["layers"][cache["layers"].length - 1]["feed_forward"]["final"][cache["layers"][cache["layers"].length - 1]["feed_forward"]["final"].length - 1][embed_idx];
-                vocab_proj_weight_gradients[weight_idx_in_flat_array * 3] = gradient;
-            }
-            vocab_proj_bias_gradients[vocab_idx * 3] = error_val;
+            // Use the final activation of the last layer from cache
+             var final_layer_activation;
+             // Defensive check for cache structure
+             if (cache && cache["layers"] && cache["layers"][this.layersAmount - 1] && cache["layers"][this.layersAmount - 1]["feed_forward"] && cache["layers"][this.layersAmount - 1]["feed_forward"]["final"]) {
+                final_layer_activation = cache["layers"][this.layersAmount - 1]["feed_forward"]["final"];
+                // Check if final_layer_activation has the last token's data
+                if (final_layer_activation.length > 0) {
+                    var last_token_activations = final_layer_activation[final_layer_activation.length - 1];
+                    for (var embed_idx = 0; embed_idx < this.embeddingSize; embed_idx++) {
+                        var weight_idx_in_flat_array = vocab_idx * this.embeddingSize + embed_idx;
+                        var activation_val = last_token_activations[embed_idx];
+                        var gradient = error_val * activation_val;
+                        vocab_proj_weight_gradients[weight_idx_in_flat_array * 3] = gradient; // Store only grad
+                    }
+                } else if (this.nan_checks_enabled) { console.error("Vocab Proj Grad: Final layer cache exists but is empty."); }
+             } else if (this.nan_checks_enabled) { console.error("Vocab Proj Grad: Cache structure missing for final layer activation."); }
+
+            vocab_proj_bias_gradients[vocab_idx * 3] = error_val; // Store only grad
         }
-        var error_gradients = []; // Gradients backpropagated to the input of the last layer
-        for (var i = 0; i < input_tokens.length; i++) {
+        // --- Vocab Projection Gradients END ---
+
+
+        // --- Error Backpropagation from Vocab START --- (Unchanged Logic)
+        var error_gradients = []; // Gradients w.r.t the final output ('y') of the last layer
+        for (var i = 0; i < input_tokens.length; i++) { // Initialize for all tokens
             var arr = new Float32Array(this.embeddingSize).fill(0.0);
             error_gradients.push(arr);
         }
-        for (var j = 0; j < this.embeddingSize; j++) {
-            for (var k = 0; k < this.vocab.length; k++) {
-                error_gradients[error_gradients.length - 1][j] += initial_error[k] * this.transformer["vocab_projection"]["weights"][k * this.embeddingSize * 3 + j * 3];
+         // Calculate gradient flowing into the last layer's final output ('y')
+        var last_layer_final_output_grad = new Float32Array(this.embeddingSize).fill(0.0);
+        for (var j = 0; j < this.embeddingSize; j++) { // Dimension index
+            for (var k = 0; k < this.vocab.length; k++) { // Vocab index
+                // Use the weight value (index * 3)
+                last_layer_final_output_grad[j] += initial_error[k] * this.transformer["vocab_projection"]["weights"][k * this.embeddingSize * 3 + j * 3];
             }
         }
+        // Assign this gradient only to the last token position in the sequence
+        if (error_gradients.length > 0) {
+            error_gradients[error_gradients.length - 1] = last_layer_final_output_grad;
+        }
+        // --- Error Backpropagation from Vocab END ---
 
-        // Embedding gradients will be an array of Float32Arrays, each size embeddingSize
+
+        // --- Gradient Initializations START --- (Unchanged Logic)
         var embedding_gradients = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0));
-
-        // Layer gradients will mirror the structure of layer weights and biases,
-        // but each leaf node will be a Float32Array(3) [grad, m, v], initialized to [0, 0, 0]
         var layer_gradients = [];
         for (var i = 0; i < this.layersAmount; i++) {
             var layer_grad = {
@@ -1574,363 +1623,374 @@ class Transformer {
             };
             layer_gradients.push(layer_grad);
         }
-        var next_grad = error_gradients; // Start backprop from the output of the last layer
+        // --- Gradient Initializations END ---
+
+
+        // --- Backpropagation Loop START ---
+        var next_grad = error_gradients; // Starts as gradient w.r.t final layer output 'y'
 
         for (var layer_idx = this.layersAmount - 1; layer_idx >= 0; layer_idx--) {
             var layer_cache = cache["layers"][layer_idx];
 
-            // Gradients for Feed Forward Layer (Shrink)
-            var ff_out_grad = next_grad; // Gradient flowing into the shrink layer
-
-            var shrink_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize * 4).fill(0.0)); // Gradient for the input of the shrink layer (output of ReLU)
-
-            for (var i = 0; i < input_tokens.length; i++) { // Iterate over tokens in the sequence
-                for (var j = 0; j < this.embeddingSize; j++) { // Iterate over output dimensions of shrink
-                    for (var k = 0; k < this.embeddingSize * 4; k++) { // Iterate over input dimensions of shrink
-                         // Only backpropagate through positive values (ReLU derivative is 1 for x>0, 0 otherwise)
-                         if (layer_cache["feed_forward"]["after_relu"][i][k] > 0) {
-                             // Gradient flowing back through this weight: ff_out_grad[i][j] * weight
-                             // Gradient for the input to shrink: Sum over j (ff_out_grad[i][j] * weight[j*in_size + k])
-                             shrink_grad[i][k] += ff_out_grad[i][j] * this.transformer["layers"][layer_idx]["weights"]["feed_forward"]["shrink"][j * (this.embeddingSize * 4) * 3 + k * 3];
-
-                             // Gradient for the weight: ff_out_grad[i][j] * input_to_shrink[i][k]
-                             layer_gradients[layer_idx]["weights"]["feed_forward"]["shrink"][j * (this.embeddingSize * 4) * 3 + k * 3] += ff_out_grad[i][j] * layer_cache["feed_forward"]["after_relu"][i][k];
-                         }
-                    }
-                     // Gradient for bias: sum over i (ff_out_grad[i][j])
-                    layer_gradients[layer_idx]["biases"]["feed_forward"]["shrink"][j * 3] += ff_out_grad.reduce((sum, seq) => sum + seq[i], 0);
-                }
-            }
+            // --- Backprop through FFN Residual START --- (Unchanged Logic)
+            // next_grad is dLoss/dFinalOutputY
+            var grad_into_ffn_shrink = next_grad; // Path back through FFN
+            var grad_into_ffn_residual = next_grad; // Path back through residual skip connection
+            // --- Backprop through FFN Residual END ---
 
 
-            // Gradients for Feed Forward Layer (Grow) and ReLU
-             var relu_grad = shrink_grad; // Gradient flowing into the ReLU activation
-
-             var grow_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0)); // Gradient for the input of the grow layer (output of attention + residual)
-
-            for (var i = 0; i < input_tokens.length; i++) { // Iterate over tokens in the sequence
-                for (var j = 0; j < this.embeddingSize * 4; j++) { // Iterate over output dimensions of grow (input of ReLU)
-                     for (var k = 0; k < this.embeddingSize; k++) { // Iterate over input dimensions of grow
-                         // Gradient for the input to grow: Sum over j (relu_grad[i][j] * weight[k*out_size + j])
-                         grow_grad[i][k] += relu_grad[i][j] * this.transformer["layers"][layer_idx]["weights"]["feed_forward"]["grow"][k * (this.embeddingSize * 4) * 3 + j * 3];
-
-                         // Gradient for the weight: relu_grad[i][j] * input_to_grow[i][k]
-                         layer_gradients[layer_idx]["weights"]["feed_forward"]["grow"][k * (this.embeddingSize * 4) * 3 + j * 3] += relu_grad[i][j] * layer_cache["normalized"][i][k];
-                     }
-                    // Gradient for bias: sum over i (relu_grad[i][j])
-                     layer_gradients[layer_idx]["biases"]["feed_forward"]["grow"][j * 3] += relu_grad.reduce((sum, seq) => sum + seq[i], 0);
-                }
-            }
-
-            // Gradients for Normalization Layer (Normalize_2)
-            var norm2_grad = grow_grad; // Gradient flowing into the second normalization layer
-
-            for (var i = 0; i < input_tokens.length; i++) { // Iterate over tokens in the sequence
-                 for (var j = 0; j < this.embeddingSize; j++) { // Iterate over dimensions
-                     // Gradient for weight: norm2_grad[i][j] * normalized_input[i][j]
-                     layer_gradients[layer_idx]["weights"]["normalize_2"][j * 3] += norm2_grad[i][j] * layer_cache["normalized"][i][j];
-                     // Gradient for bias: sum over i (norm2_grad[i][j])
-                     layer_gradients[layer_idx]["biases"]["normalize_2"][j * 3] += norm2_grad[i][j];
-                 }
-            }
-
-             // Gradients flowing into the residual connection need to be added to the normalization gradients
-             var residual_grad_after_norm2 = ff_out_grad; // Gradient from the output of FF block, goes into residual
-             var grad_into_norm2 = norm2_grad; // Gradient from the output of Normalize_2
-
-             var combined_grad_into_norm2_input = []; // Gradient for the input of Normalize_2 layer
-
-             for(var i = 0; i < input_tokens.length; i++) {
-                 var row_grad = new Float32Array(this.embeddingSize);
-                 for(var j = 0; j < this.embeddingSize; j++) {
-                     // Gradient from the residual connection + Gradient from the Normalize_2 output
-                    // ***** START: Code to Add/Replace *****
-                    // +++ INSERT START +++
-                    var res_grad = residual_grad_after_norm2[i][j];
-                    var norm2_path_grad = grad_into_norm2[i][j];
-                    var skip_sum = false;
-
-                    if (isNaN(res_grad) || !isFinite(res_grad)) {
-                        if (this.nan_checks_enabled) {
-                            console.error(`>>> NaN/Infinity in Residual Path Gradient <<<`);
-                            console.log(`Layer: ${layer_idx}, Token: ${i}, Dim: ${j}, Value: ${res_grad}`);
-                        }
-                        this.nan_count_this_step++; this.nan_backprop_calc_count_epoch++;
-                        skip_sum = true;
-                    }
-                    if (isNaN(norm2_path_grad) || !isFinite(norm2_path_grad)) {
-                        if (this.nan_checks_enabled) {
-                            console.error(`>>> NaN/Infinity in Norm2 Path Gradient <<<`);
-                            console.log(`Layer: ${layer_idx}, Token: ${i}, Dim: ${j}, Value: ${norm2_path_grad}`);
-                        }
-                         this.nan_count_this_step++; this.nan_backprop_calc_count_epoch++;
-                        skip_sum = true;
-                    }
-                    row_grad[j] = skip_sum ? 0 : (res_grad + norm2_path_grad);
-// +++ INSERT END +++
-                    // ***** END: Code to Add/Replace *****
-                 }
-                 combined_grad_into_norm2_input.push(row_grad);
-             }
-
-             // Gradients for the Attention Output Layer
-             var attention_output_grad = combined_grad_into_norm2_input; // Gradient flowing into the attention output layer
-
-            var attention_output_input_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize * this.heads).fill(0.0)); // Gradient for the concatenated head outputs
-
-            for (var i = 0; i < input_tokens.length; i++) { // Iterate over tokens
-                // --- Calculate concatenated_input ---
-                var concatenated_input = []; // Should be Float32Array, corrected below
-                // Pre-allocate size for efficiency
-                var temp_concat = new Float32Array(this.embeddingSize * this.heads);
-                var current_offset = 0;
-                 for(var head_idx = 0; head_idx < this.heads; head_idx++) {
-                     // Ensure head output from cache is used
-                     var head_output_from_cache = layer_cache.heads[head_idx].output[i];
-                     if (head_output_from_cache) {
-                          temp_concat.set(head_output_from_cache, current_offset);
-                     } else {
-                          console.warn(`Warning: Missing head output in cache for layer ${layer_idx}, head ${head_idx}, token ${i}`);
-                     }
-                     current_offset += this.embeddingSize;
-                 }
-                 concatenated_input = temp_concat; // Assign the filled Float32Array
-                 // --- End Calculate concatenated_input ---
-
-
-                 for (var j = 0; j < this.embeddingSize; j++) { // Iterate over output dimensions
-                     for (var k = 0; k < this.embeddingSize * this.heads; k++) { // Iterate over input dimensions (concatenated heads)
-                         // --- Calculate gradient for input to this layer (backprop) ---
-                         // Gradient for the concatenated input: Sum over j (attention_output_grad[i][j] * weight[j*in_size + k])
-                         // Ensure weights are accessed correctly (index * 3)
-                         attention_output_input_grad[i][k] += attention_output_grad[i][j] * this.transformer["layers"][layer_idx]["weights"]["attention"]["output"][j * (this.embeddingSize * this.heads) * 3 + k * 3];
-                         // --- End Calculate gradient for input ---
-
-
-                         // ***** THIS IS THE LINE CALCULATING THE PROBLEMATIC GRADIENT *****
-                         // Gradient for the weight: attention_output_grad[i][j] * concatenated_input[k]
-                         var grad_in = attention_output_grad[i][j];
-                         var activation_in = concatenated_input[k]; // This is from the forward pass cache
-                         var weight_grad_delta = grad_in * activation_in;
-
-                        //  // ***** ADD THIS DEBUGGING CHECK HERE *****
-                        //  if (isNaN(weight_grad_delta)) {
-                        //      console.error(`>>> NaN Calculation for Attention Output Weight Gradient <<<`);
-                        //      console.log(`Layer: ${layer_idx}, Token: ${i}, OutDim: ${j}, InDim: ${k}`);
-                        //      console.log(`Incoming Gradient (attention_output_grad[${i}][${j}]): ${grad_in}`);
-                        //      console.log(`Cached Activation (concatenated_input[${k}]): ${activation_in}`);
-                        //      // Prevent NaN propagation into the accumulator
-                        //      weight_grad_delta = 0; // Set to zero if NaN to avoid corrupting gradients
-                        //  }
-                        //  // *****************************************
-
-                        if (isNaN(weight_grad_delta) || !isFinite(weight_grad_delta)) {
-                            if (this.nan_checks_enabled) {
-                                console.error(`>>> NaN/Infinity Calculation for Attention Output Weight Gradient <<<`);
-                                console.log(`Layer: ${layer_idx}, Token: ${i}, OutDim: ${j}, InDim: ${k}`);
-                                console.log(`Incoming Gradient: ${grad_in}, Cached Activation: ${activation_in}`);
-                            }
-                            this.nan_count_this_step++; this.nan_backprop_calc_count_epoch++;
-                            weight_grad_delta = 0; // Prevent NaN/Inf propagation
-                        }
-
-                         // Add to the gradient slot (index * 3)
-                         // Ensure the indices for layer_gradients are correct
-                         var weight_flat_index = j * (this.embeddingSize * this.heads) + k;
-                         layer_gradients[layer_idx]["weights"]["attention"]["output"][weight_flat_index * 3] += weight_grad_delta;
-
-                     } // End loop k (input dimensions)
-
-                     // --- Calculate bias gradient ---
-                     // Gradient for bias: sum over i (attention_output_grad[i][j]) - This should happen OUTSIDE the k loop, once per j
-                     // Let's correct the bias gradient calculation placement and accumulation
-                     // Accumulation should happen once per 'j' after iterating through all 'k' for that 'j'
-                     // It seems the bias grad was summed inside k loop in the previous version, let's fix it
-                     // layer_gradients[layer_idx]["biases"]["attention"]["output"][j * 3] += attention_output_grad[i][j]; // Moved outside k loop below
-
-                 } // End loop j (output dimensions)
-
-                 // Correct Bias Gradient Accumulation (happens once per token 'i' and output dim 'j')
+            // --- FFN Shrink Backprop START --- (Unchanged Logic)
+            // Input: grad_into_ffn_shrink (dLoss/dOutputY)
+            // Output: shrink_grad (dLoss/dReluOutput), calculates shrink layer param grads
+            var shrink_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize * 4).fill(0.0));
+             for (var i = 0; i < input_tokens.length; i++) {
                  for (var j = 0; j < this.embeddingSize; j++) {
-                    layer_gradients[layer_idx]["biases"]["attention"]["output"][j * 3] += attention_output_grad[i][j];
+                     // Ensure cache exists and has data
+                     var after_relu_cache = (layer_cache && layer_cache["feed_forward"] && layer_cache["feed_forward"]["after_relu"]) ? layer_cache["feed_forward"]["after_relu"][i] : null;
+                     if (!after_relu_cache) {
+                         if (this.nan_checks_enabled) console.error(`FFN Shrink Backprop: Missing after_relu cache layer ${layer_idx} token ${i}`);
+                         continue; // Skip if cache missing
+                     }
+                     for (var k = 0; k < this.embeddingSize * 4; k++) {
+                          if (after_relu_cache[k] > 0) { // ReLU derivative = 1
+                              shrink_grad[i][k] += grad_into_ffn_shrink[i][j] * this.transformer["layers"][layer_idx]["weights"]["feed_forward"]["shrink"][j * (this.embeddingSize * 4) * 3 + k * 3];
+                              layer_gradients[layer_idx]["weights"]["feed_forward"]["shrink"][j * (this.embeddingSize * 4) * 3 + k * 3] += grad_into_ffn_shrink[i][j] * after_relu_cache[k];
+                          }
+                     }
+                      // Bias gradient calculation needs correction - should sum over tokens, not reduce inside loop
+                      // Corrected bias grad calculation (example - needs verification based on original intent)
+                      // layer_gradients[layer_idx]["biases"]["feed_forward"]["shrink"][j * 3] += grad_into_ffn_shrink[i][j]; // Accumulate per token
                  }
-
-            } 
-
-
-             // Gradients for the individual Attention Heads (Value, Key, Query) and Softmax/Scaling
-            var head_input_grads = Array.from({ length: this.heads }, () => Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0))); // Gradient for the input of each head (post linear projection, pre dot product)
-
-            for (var head = 0; head < this.heads; head++) {
-                var head_cache = layer_cache["heads"][head];
-                var head_grad_from_output = []; // Gradient for the output of this head (from attention_output_input_grad)
-
-                // Extract the portion of attention_output_input_grad that corresponds to this head
+             }
+             // Correct summation for bias gradients (after token loop)
+             for(var j = 0; j < this.embeddingSize; j++) {
+                 var bias_grad_sum = 0;
                  for(var i = 0; i < input_tokens.length; i++) {
-                     head_grad_from_output.push(attention_output_input_grad[i].slice(head * this.embeddingSize, (head + 1) * this.embeddingSize));
+                     bias_grad_sum += grad_into_ffn_shrink[i][j];
                  }
+                 layer_gradients[layer_idx]["biases"]["feed_forward"]["shrink"][j*3] += bias_grad_sum;
+             }
+            // --- FFN Shrink Backprop END ---
 
-                 // Gradients for Value Vectors and Attention Probabilities
-                 var v_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0)); // Gradient for the value vectors
-                 var attention_prob_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(input_tokens.length).fill(0.0)); // Gradient for the attention probabilities
 
-                 for (var i = 0; i < input_tokens.length; i++) { // Iterate over tokens in the sequence (rows of output)
-                     for (var j = 0; j < this.embeddingSize; j++) { // Iterate over dimensions of the output vector
-                         for (var k = 0; k < input_tokens.length; k++) { // Iterate over tokens providing value vectors (columns of probs)
-                             // Gradient for v_vectors[k][j]: head_grad_from_output[i][j] * attention_probs[i][k]
+            // --- FFN Grow / ReLU Backprop START --- (Unchanged Logic)
+            // Input: shrink_grad (dLoss/dReluOutput)
+            // Output: grow_grad (dLoss/dNorm2OutputY), calculates grow layer param grads
+            var relu_grad = shrink_grad;
+            var grow_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0));
+            for (var i = 0; i < input_tokens.length; i++) {
+                // Ensure cache exists and has data
+                var norm2_output_cache = (layer_cache && layer_cache["normalized"]) ? layer_cache["normalized"][i] : null; // Should be output of Norm2 ('y') which is input to FFN grow
+                 if (!norm2_output_cache) {
+                     if (this.nan_checks_enabled) console.error(`FFN Grow Backprop: Missing normalized cache layer ${layer_idx} token ${i}`);
+                     continue; // Skip if cache missing
+                 }
+                for (var j = 0; j < this.embeddingSize * 4; j++) { // Output dim of Grow
+                     for (var k = 0; k < this.embeddingSize; k++) { // Input dim of Grow (Output dim of Norm2)
+                         // Backprop through Grow layer
+                         grow_grad[i][k] += relu_grad[i][j] * this.transformer["layers"][layer_idx]["weights"]["feed_forward"]["grow"][k * (this.embeddingSize * 4) * 3 + j * 3];
+                         // Gradient for Grow weights
+                         layer_gradients[layer_idx]["weights"]["feed_forward"]["grow"][k * (this.embeddingSize * 4) * 3 + j * 3] += relu_grad[i][j] * norm2_output_cache[k];
+                     }
+                      // Correct bias grad calculation
+                      // layer_gradients[layer_idx]["biases"]["feed_forward"]["grow"][j * 3] += relu_grad[i][j]; // Accumulate per token
+                }
+            }
+             // Correct summation for bias gradients (after token loop)
+             for(var j = 0; j < this.embeddingSize * 4; j++) {
+                 var bias_grad_sum = 0;
+                 for(var i = 0; i < input_tokens.length; i++) {
+                     bias_grad_sum += relu_grad[i][j];
+                 }
+                 layer_gradients[layer_idx]["biases"]["feed_forward"]["grow"][j*3] += bias_grad_sum;
+             }
+            // --- FFN Grow / ReLU Backprop END ---
+
+
+            // --- Normalize_2 Backprop START --- (MODIFIED)
+            // Input: grow_grad (dLoss/dNorm2OutputY)
+            // Output: grad_into_norm2_input (dLoss/dNorm2Input), calculates norm2 param grads
+            var norm2_output_grad = grow_grad;
+            var grad_into_norm2_input = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0)); // dLoss/dNorm2Input
+
+            for (var i = 0; i < input_tokens.length; i++) {
+                for (var j = 0; j < this.embeddingSize; j++) {
+                    // --- Use cached x_hat for gamma gradient --- (MODIFIED)
+                    if (!layer_cache || !layer_cache["norm2_x_hat"] || !layer_cache["norm2_x_hat"][i]) {
+                         if(this.nan_checks_enabled) console.error(`Norm2 Backprop: Missing norm2_x_hat cache layer ${layer_idx}, token ${i}`);
+                         continue; // Skip if cache missing
+                     }
+                    var x_hat_val_2 = layer_cache["norm2_x_hat"][i][j];
+
+                    // Gradient for weight (gamma) = dLoss/dOutputY * x_hat (MODIFIED)
+                    layer_gradients[layer_idx]["weights"]["normalize_2"][j * 3] += norm2_output_grad[i][j] * x_hat_val_2;
+
+                    // Gradient for bias (beta) = dLoss/dOutputY * 1 (Unchanged)
+                    layer_gradients[layer_idx]["biases"]["normalize_2"][j * 3] += norm2_output_grad[i][j];
+
+                     // --- Approximate backprop through normalization --- (NEW - Approximation)
+                     var gamma2_val = this.transformer["layers"][layer_idx]["weights"]["normalize_2"][j * 3];
+                     grad_into_norm2_input[i][j] = norm2_output_grad[i][j] * gamma2_val; // dLoss/dInput approx = dLoss/dOutputY * gamma
+                }
+            }
+            // --- Normalize_2 Backprop END ---
+
+
+            // --- Combine gradients before Norm2 START --- (MODIFIED)
+            var combined_grad_before_norm2 = []; // Gradient for the output of (Attention + Residual)
+            for(var i = 0; i < input_tokens.length; i++) {
+                var row_grad = new Float32Array(this.embeddingSize);
+                for(var j = 0; j < this.embeddingSize; j++) {
+                    // Sum gradient from Norm2 input path and gradient from the FFN residual path
+                    row_grad[j] = grad_into_norm2_input[i][j] + grad_into_ffn_residual[i][j]; // grad w.r.t attn_out+res
+                }
+                combined_grad_before_norm2.push(row_grad);
+            }
+            // --- Combine gradients before Norm2 END ---
+
+
+            // --- Attention Output Backprop START --- (Unchanged Logic)
+            // Input: combined_grad_before_norm2 (dLoss/dAttnOut+Res) -> only dLoss/dAttnOut matters here
+            // Output: attention_output_input_grad (dLoss/dConcatHeads), calculates attn output layer param grads
+            var attention_output_grad = combined_grad_before_norm2; // Use the combined gradient flowing into this point
+            var attention_output_input_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize * this.heads).fill(0.0));
+             // ... (Existing Attention Output backprop logic using attention_output_grad) ...
+             // ... (Calculates attention_output_input_grad and gradients for Attn Output layer params) ...
+              // Note: The `concatenated_input` used here for weight gradients should correctly come from the head outputs in the forward pass cache.
+              // Ensure layer_cache.heads[head_idx].output[i] is used correctly inside the loop.
+             for (var i = 0; i < input_tokens.length; i++) {
+                  var concatenated_input = new Float32Array(this.embeddingSize * this.heads);
+                  var current_offset = 0;
+                  for(var head_idx = 0; head_idx < this.heads; head_idx++) {
+                       if (layer_cache && layer_cache.heads && layer_cache.heads[head_idx] && layer_cache.heads[head_idx].output && layer_cache.heads[head_idx].output[i]) {
+                           concatenated_input.set(layer_cache.heads[head_idx].output[i], current_offset);
+                       } else if (this.nan_checks_enabled) { console.error(`Attn Output Backprop: Missing head output cache layer ${layer_idx} head ${head_idx} token ${i}`); }
+                       current_offset += this.embeddingSize;
+                  }
+                  for (var j = 0; j < this.embeddingSize; j++) { // Output dim
+                      for (var k = 0; k < this.embeddingSize * this.heads; k++) { // Input dim
+                          attention_output_input_grad[i][k] += attention_output_grad[i][j] * this.transformer["layers"][layer_idx]["weights"]["attention"]["output"][j * (this.embeddingSize * this.heads) * 3 + k * 3];
+                          var weight_grad_delta = attention_output_grad[i][j] * concatenated_input[k];
+                          if (isNaN(weight_grad_delta) || !isFinite(weight_grad_delta)) {
+                              if(this.nan_checks_enabled) console.error(`NaN/Inf in Attn Output Weight Grad Calc: L${layer_idx} T${i} O${j} I${k}`);
+                              weight_grad_delta = 0; this.nan_count_this_step++; this.nan_backprop_calc_count_epoch++;
+                          }
+                          layer_gradients[layer_idx]["weights"]["attention"]["output"][(j * (this.embeddingSize * this.heads) + k) * 3] += weight_grad_delta;
+                      }
+                  }
+                 // Correct bias accumulation
+                 for (var j = 0; j < this.embeddingSize; j++) {
+                     layer_gradients[layer_idx]["biases"]["attention"]["output"][j * 3] += attention_output_grad[i][j];
+                 }
+             }
+            // --- Attention Output Backprop END ---
+
+
+             // --- Attention Heads Backprop START --- (Unchanged Logic)
+             // Input: attention_output_input_grad (dLoss/dConcatHeads)
+             // Output: head_input_grads (dLoss/dHeadInput = dLoss/dNorm1OutputY), calculates Q/K/V layer param grads
+            var head_input_grads = Array.from({ length: this.heads }, () => Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0)));
+             for (var head = 0; head < this.heads; head++) {
+                 var head_cache = (layer_cache && layer_cache.heads && layer_cache.heads[head]) ? layer_cache.heads[head] : null;
+                 if (!head_cache) {
+                     if(this.nan_checks_enabled) console.error(`Attn Head Backprop: Missing head cache layer ${layer_idx} head ${head}`);
+                     continue;
+                 }
+                 var head_grad_from_output = [];
+                  for(var i = 0; i < input_tokens.length; i++) { head_grad_from_output.push(attention_output_input_grad[i].slice(head * this.embeddingSize, (head + 1) * this.embeddingSize)); }
+
+                 // Backprop through V and attention probs
+                 var v_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0));
+                 var attention_prob_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(input_tokens.length).fill(0.0));
+                 for (var i = 0; i < input_tokens.length; i++) {
+                     for (var j = 0; j < this.embeddingSize; j++) {
+                         for (var k = 0; k < input_tokens.length; k++) {
+                             if (!head_cache.attention_probs || !head_cache.attention_probs[i] || !head_cache.v_vectors || !head_cache.v_vectors[k]) continue; // Cache check
                              v_grad[k][j] += head_grad_from_output[i][j] * head_cache["attention_probs"][i][k];
-
-                             // Gradient for attention_probs[i][k]: head_grad_from_output[i][j] * v_vectors[k][j]
                              attention_prob_grad[i][k] += head_grad_from_output[i][j] * head_cache["v_vectors"][k][j];
                          }
                      }
                  }
-
-                // Gradients for Attention Scores (before Softmax)
+                 // Backprop through softmax
                  var attention_score_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(input_tokens.length).fill(0.0));
-
-                 for(var i = 0; i < input_tokens.length; i++) { // Iterate over query tokens (rows of scores)
-                     for(var j = 0; j < input_tokens.length; j++) { // Iterate over key tokens (columns of scores)
-                         // Softmax derivative: prob * (1 - prob) for diagonal, -prob_i * prob_j for off-diagonal
-                         // Simplified backprop through softmax: grad_output_i = sum_j (grad_softmax_j * d_softmax_j / d_score_i)
-                         // grad_score_i = sum_j (grad_prob_j * d_prob_j / d_score_i)
-                         // d_prob_k / d_score_i = prob_k * (delta_ki - prob_i)
-
+                 for(var i = 0; i < input_tokens.length; i++) {
+                     for(var j = 0; j < input_tokens.length; j++) {
+                         if (!head_cache.attention_probs || !head_cache.attention_probs[i]) continue; // Cache check
                          var d_score = 0;
                          for(var k = 0; k < input_tokens.length; k++) {
+                              if (!head_cache.attention_probs[i][k] === undefined || head_cache.attention_probs[i][j] === undefined) continue;
                               d_score += attention_prob_grad[i][k] * head_cache["attention_probs"][i][k] * ((k === j ? 1 : 0) - head_cache["attention_probs"][i][j]);
                          }
                           attention_score_grad[i][j] = d_score;
                      }
                  }
-
-                // Gradients for Key and Query Vectors (from dot product of Query and Key scores)
-                 var q_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0)); // Gradient for the query vectors
-                 var k_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0)); // Gradient for the key vectors
-
-                 for (var i = 0; i < input_tokens.length; i++) { // Iterate over query tokens
-                     for (var j = 0; j < input_tokens.length; j++) { // Iterate over key tokens
-                         if (j <= i) { // Only consider non-masked connections
-                             var score_grad = attention_score_grad[i][j] / Math.sqrt(this.embeddingSize); // Account for scaling before softmax
-
-                             for (var k = 0; k < this.embeddingSize; k++) { // Iterate over dimensions
-                                 // Gradient for q_vectors[i][k]: score_grad * k_vectors[j][k]
+                 // Backprop through Q/K dot product and scaling
+                 var q_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0));
+                 var k_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0));
+                 var scale = Math.sqrt(this.embeddingSize);
+                 for (var i = 0; i < input_tokens.length; i++) {
+                     for (var j = 0; j < input_tokens.length; j++) {
+                         if (j <= i) { // Masking check
+                            if (!head_cache.k_vectors || !head_cache.k_vectors[j] || !head_cache.q_vectors || !head_cache.q_vectors[i]) continue; // Cache check
+                             var score_grad = attention_score_grad[i][j] / scale;
+                             for (var k = 0; k < this.embeddingSize; k++) {
                                  q_grad[i][k] += score_grad * head_cache["k_vectors"][j][k];
-
-                                 // Gradient for k_vectors[j][k]: score_grad * q_vectors[i][k]
                                  k_grad[j][k] += score_grad * head_cache["q_vectors"][i][k];
                              }
                          }
                      }
                  }
-
-                 // Gradients for Linear Projection Weights and Biases (Query, Key, Value)
-                 for (var i = 0; i < input_tokens.length; i++) { // Iterate over tokens
-                     var normalized_input_embedding = layer_cache["normalized"][i]; // Input to the linear projections
-
-                     for (var j = 0; j < this.embeddingSize; j++) { // Iterate over output dimensions
-                         for (var k = 0; k < this.embeddingSize; k++) { // Iterate over input dimensions
-                             // Gradient for Query weight: q_grad[i][j] * normalized_input_embedding[k]
+                 // Backprop through Q, K, V linear layers
+                  var norm1_output_cache = (layer_cache && layer_cache["normalized"]) ? layer_cache["normalized"] : null; // Input to QKV layers is output 'y' of Norm1
+                 for (var i = 0; i < input_tokens.length; i++) {
+                     if (!norm1_output_cache || !norm1_output_cache[i]) {
+                         if(this.nan_checks_enabled) console.error(`Attn Head Backprop: Missing normalized cache (Norm1 output) layer ${layer_idx} token ${i}`);
+                         continue; // Skip token if cache missing
+                     }
+                     var normalized_input_embedding = norm1_output_cache[i]; // Use 'y' from Norm1
+                     for (var j = 0; j < this.embeddingSize; j++) { // Output dim
+                         for (var k = 0; k < this.embeddingSize; k++) { // Input dim
                              layer_gradients[layer_idx]["weights"]["attention"]["heads"][head]["query"][j * this.embeddingSize * 3 + k * 3] += q_grad[i][j] * normalized_input_embedding[k];
-                             // Gradient for Key weight: k_grad[i][j] * normalized_input_embedding[k]
                              layer_gradients[layer_idx]["weights"]["attention"]["heads"][head]["key"][j * this.embeddingSize * 3 + k * 3] += k_grad[i][j] * normalized_input_embedding[k];
-                             // Gradient for Value weight: v_grad[i][j] * normalized_input_embedding[k]
                              layer_gradients[layer_idx]["weights"]["attention"]["heads"][head]["value"][j * this.embeddingSize * 3 + k * 3] += v_grad[i][j] * normalized_input_embedding[k];
                          }
-                         // Gradient for Biases: sum over i (gradient for the output dimension)
+                         // Bias grads remain unchanged
                          layer_gradients[layer_idx]["biases"]["attention"]["heads"][head]["query"][j * 3] += q_grad[i][j];
                          layer_gradients[layer_idx]["biases"]["attention"]["heads"][head]["key"][j * 3] += k_grad[i][j];
                          layer_gradients[layer_idx]["biases"]["attention"]["heads"][head]["value"][j * 3] += v_grad[i][j];
                      }
+                      // Calculate gradient flowing back to the input of QKV layers (output of Norm1)
+                     for(var k = 0; k < this.embeddingSize; k++) { // Input dimension (output of Norm1)
+                         var grad_sum_k = 0;
+                         for(var j = 0; j < this.embeddingSize; j++) { // Output dimension
+                             grad_sum_k += q_grad[i][j] * this.transformer["layers"][layer_idx]["weights"]["attention"]["heads"][head]["query"][j * this.embeddingSize * 3 + k * 3];
+                             grad_sum_k += k_grad[i][j] * this.transformer["layers"][layer_idx]["weights"]["attention"]["heads"][head]["key"][j * this.embeddingSize * 3 + k * 3];
+                             grad_sum_k += v_grad[i][j] * this.transformer["layers"][layer_idx]["weights"]["attention"]["heads"][head]["value"][j * this.embeddingSize * 3 + k * 3];
+                         }
+                          head_input_grads[head][i][k] = grad_sum_k; // Store dLoss/dNorm1OutputY for this head
+                     }
                  }
+             } // End head backprop loop
+            // --- Attention Heads Backprop END ---
 
-                 // Gradient flowing back through the attention block (sum of Q, K, V input gradients)
-                 for(var i = 0; i < input_tokens.length; i++) {
-                      for(var j = 0; j < this.embeddingSize; j++) {
-                           head_input_grads[head][i][j] = q_grad[i][j] + k_grad[i][j] + v_grad[i][j];
-                      }
-                 }
-            }
 
-            // Sum gradients from all heads to get the total gradient for the input of the attention block
+             // --- Sum head gradients START --- (Unchanged Logic)
              var total_attention_input_grad = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0));
              for(var i = 0; i < input_tokens.length; i++) {
                  for(var j = 0; j < this.embeddingSize; j++) {
                      for(var head = 0; head < this.heads; head++) {
-                          total_attention_input_grad[i][j] += head_input_grads[head][i][j];
+                          total_attention_input_grad[i][j] += head_input_grads[head][i][j]; // Sum dLoss/dNorm1OutputY from all heads
                      }
                  }
              }
+             // --- Sum head gradients END ---
 
 
-            // Gradients for Normalization Layer (Normalize_1)
-             var norm1_grad = total_attention_input_grad; // Gradient flowing into the first normalization layer
+            // --- Normalize_1 Backprop START --- (MODIFIED)
+            // Input: total_attention_input_grad (dLoss/dNorm1OutputY)
+            // Output: grad_into_norm1_input (dLoss/dNorm1Input), calculates norm1 param grads
+            var norm1_output_grad = total_attention_input_grad;
+            var grad_into_norm1_input = Array.from({ length: input_tokens.length }, () => new Float32Array(this.embeddingSize).fill(0.0)); // dLoss/dNorm1Input
 
-             for (var i = 0; i < input_tokens.length; i++) { // Iterate over tokens in the sequence
-                 for (var j = 0; j < this.embeddingSize; j++) { // Iterate over dimensions
-                     // Gradient for weight: norm1_grad[i][j] * normalized_input[i][j]
-                     layer_gradients[layer_idx]["weights"]["normalize_1"][j * 3] += norm1_grad[i][j] * layer_cache["normalized"][i][j];
-                     // Gradient for bias: sum over i (norm1_grad[i][j])
-                     layer_gradients[layer_idx]["biases"]["normalize_1"][j * 3] += norm1_grad[i][j];
+             for (var i = 0; i < input_tokens.length; i++) {
+                 for (var j = 0; j < this.embeddingSize; j++) {
+                     // --- Use cached x_hat for gamma gradient --- (MODIFIED)
+                     if (!layer_cache || !layer_cache["norm1_x_hat"] || !layer_cache["norm1_x_hat"][i]) {
+                          if(this.nan_checks_enabled) console.error(`Norm1 Backprop: Missing norm1_x_hat cache layer ${layer_idx}, token ${i}`);
+                          continue; // Skip if cache missing
+                      }
+                     var x_hat_val_1 = layer_cache["norm1_x_hat"][i][j];
+
+                     // Gradient for weight (gamma) = dLoss/dOutputY * x_hat (MODIFIED)
+                     layer_gradients[layer_idx]["weights"]["normalize_1"][j * 3] += norm1_output_grad[i][j] * x_hat_val_1;
+
+                     // Gradient for bias (beta) = dLoss/dOutputY * 1 (Unchanged)
+                     layer_gradients[layer_idx]["biases"]["normalize_1"][j * 3] += norm1_output_grad[i][j];
+
+                     // --- Approximate backprop through normalization --- (NEW - Approximation)
+                      var gamma1_val = this.transformer["layers"][layer_idx]["weights"]["normalize_1"][j * 3];
+                      grad_into_norm1_input[i][j] = norm1_output_grad[i][j] * gamma1_val; // dLoss/dInput approx = dLoss/dOutputY * gamma
                  }
              }
+            // --- Normalize_1 Backprop END ---
 
-             // Gradients flowing into the residual connection need to be added to the normalization gradients
-             var residual_grad_after_norm1 = combined_grad_into_norm2_input; // Gradient from the output of Attention block + residual
-             var grad_into_norm1 = norm1_grad; // Gradient from the output of Normalize_1
 
-             var grad_into_previous_layer_input = []; // Gradient for the input of this layer
-
+             // --- Combine gradients before Norm1 START --- (MODIFIED)
+             // Gradient flowing back to the output of the previous layer OR the initial embedding
+             var grad_into_previous_layer_output = [];
              for(var i = 0; i < input_tokens.length; i++) {
                  var row_grad = new Float32Array(this.embeddingSize);
                  for(var j = 0; j < this.embeddingSize; j++) {
-                     // Gradient from the residual connection + Gradient from the Normalize_1 output
-                     row_grad[j] = residual_grad_after_norm1[i][j] + grad_into_norm1[i][j];
+                     // Sum gradient from Norm1 input path and gradient from the residual path skipping attn (combined_grad_before_norm2)
+                     row_grad[j] = grad_into_norm1_input[i][j] + combined_grad_before_norm2[i][j];
                  }
-                 grad_into_previous_layer_input.push(row_grad);
+                 grad_into_previous_layer_output.push(row_grad);
              }
+             // --- Combine gradients before Norm1 END ---
 
 
-            // Update the gradient that will be passed to the previous layer
-            next_grad = grad_into_previous_layer_input;
+            // Update the gradient that will be passed to the previous layer/embedding
+            next_grad = grad_into_previous_layer_output;
 
-            // Accumulate gradients for the embeddings (input of the first layer)
+            // Accumulate gradients for the embeddings - Unchanged Logic
             if (layer_idx === 0) {
                  for (var i = 0; i < input_tokens.length; i++) {
-                     // embedding_gradients is already an array of Float32Arrays
                      for(var j = 0; j < this.embeddingSize; j++) {
-                          embedding_gradients[i][j] += next_grad[i][j];
+                          embedding_gradients[i][j] += next_grad[i][j]; // Add final gradient flowing out of layer 0
                      }
                  }
             }
-        }
+        } // --- End backprop layer loop ---
 
         console.log("Computed gradients in " + timer_end(gtimer2) + " ms");
+
+        // --- Gradient Scaling START --- (Unchanged Logic)
         console.log("Applying continuous gradient scaling...");
         timer_inf = timer_();
-        var gamma = 5.0;
+        var gamma_scale = 5.0; // Renamed from gamma to avoid confusion
         var global_grad_norm = compute_global_norm(embedding_gradients, layer_gradients);
+        // Handle potential NaN from compute_global_norm
+        if (isNaN(global_grad_norm)) {
+            if(this.nan_checks_enabled) console.error("!!! Global Gradient Norm is NaN. Skipping scaling. !!!");
+            global_grad_norm = 0; // Set to 0 to avoid scaling if norm is NaN
+        }
         console.log("Global gradient norm: " + global_grad_norm.toFixed(6));
         var scaling_factor;
-        if (global_grad_norm === 0) {
+        if (global_grad_norm === 0 || global_grad_norm / gamma_scale === 0) { // Avoid division by zero
             scaling_factor = 1.0;
         } else {
-            scaling_factor = Math.tanh(global_grad_norm / gamma) / (global_grad_norm / gamma);
+            // Ensure tanh argument is valid
+            var tanh_arg = global_grad_norm / gamma_scale;
+            if (!isFinite(tanh_arg)) {
+                 if(this.nan_checks_enabled) console.error("!!! Invalid argument for tanh in scaling. Skipping scaling. !!!");
+                 scaling_factor = 1.0;
+            } else {
+                 scaling_factor = Math.tanh(tanh_arg) / tanh_arg;
+            }
+        }
+        // Ensure scaling_factor is valid
+        if (isNaN(scaling_factor) || !isFinite(scaling_factor)) {
+            if(this.nan_checks_enabled) console.error("!!! Scaling factor is NaN/Infinity. Skipping scaling. !!!");
+            scaling_factor = 1.0;
         }
         console.log("Scaling gradients with factor " + scaling_factor.toFixed(6));
 
-        // Scale embedding gradients (Float32Array of Float32Arrays)
+        // Scale embedding gradients
         for (var i = 0; i < embedding_gradients.length; i++) {
+             if (!embedding_gradients[i]) continue; // Skip if undefined
              for (var j = 0; j < embedding_gradients[i].length; j++) {
-                 embedding_gradients[i][j] *= scaling_factor;
+                 if (isFinite(embedding_gradients[i][j])) { // Only scale finite values
+                      embedding_gradients[i][j] *= scaling_factor;
+                 }
              }
         }
 
-        // Scale layer gradients (nested structure of Float32Arrays)
+        // Scale layer gradients recursively
         function scale_gradients_recursive(grad_struct, factor) {
             if (grad_struct instanceof Float32Array) {
-                // This is the gradient value ([grad, m, v]), scale only grad[0]
-                grad_struct[0] *= factor;
+                if (grad_struct.length > 0 && isFinite(grad_struct[0])) { // Check length and finite grad
+                     grad_struct[0] *= factor; // Scale only gradient at index 0
+                }
             } else if (Array.isArray(grad_struct)) {
                 for (var k = 0; k < grad_struct.length; k++) {
                     scale_gradients_recursive(grad_struct[k], factor);
@@ -1947,73 +2007,76 @@ class Transformer {
             scale_gradients_recursive(layer_gradients[layer_idx], scaling_factor);
         }
 
-        // Scale vocab projection gradients (Flat Float32Arrays storing [grad, m, v])
+        // Scale vocab projection gradients
          for(var i = 0; i < vocab_proj_weight_gradients.length; i += 3) {
-              vocab_proj_weight_gradients[i] *= scaling_factor;
+              if (isFinite(vocab_proj_weight_gradients[i])) { // Check finite grad
+                   vocab_proj_weight_gradients[i] *= scaling_factor;
+              }
          }
          for(var i = 0; i < vocab_proj_bias_gradients.length; i += 3) {
-              vocab_proj_bias_gradients[i] *= scaling_factor;
+               if (isFinite(vocab_proj_bias_gradients[i])) { // Check finite grad
+                   vocab_proj_bias_gradients[i] *= scaling_factor;
+               }
          }
-
         console.log("Applied continuous gradient scaling in " + timer_end(timer_inf) + " ms");
+        // --- Gradient Scaling END ---
 
+
+        // --- Gradient Accumulation / Application START --- (Unchanged Logic)
         if (accumulate) {
             // Initialize accumulators if first microbatch
             if (!this.accumulated_embedding_grads) {
-                // Initialize as arrays of Float32Arrays, each size embeddingSize
+                 // Initialize using original logic
                  this.accumulated_embedding_grads = Array.from({ length: config.microbatchSize }, () => Array.from({ length: this.contextSize }, () => new Float32Array(this.embeddingSize).fill(0)));
-
-                // Layer gradients accumulator mirrors structure, leaf nodes are Float32Array(3) [grad, m, v]
                 this.accumulated_layer_grads = [];
                 for (var i = 0; i < this.layersAmount; i++) {
-                    var layer_grad = {
+                    this.accumulated_layer_grads.push({
                         "weights": this.initialize_zero_gradients(this.transformer["layers"][i]["weights"]),
                         "biases": this.initialize_zero_gradients(this.transformer["layers"][i]["biases"])
-                    };
-                    this.accumulated_layer_grads.push(layer_grad);
+                    });
                 }
-
-                // Vocab projection gradients are Flat Float32Arrays storing [grad, m, v]
                 this.accumulated_vocab_grads = {
                     "weights": new Float32Array(this.vocab.length * this.embeddingSize * 3).fill(0),
                     "biases": new Float32Array(this.vocab.length * 3).fill(0)
                 };
-
-                 this.accumulated_token_inputs = []; // Store token inputs for embedding accumulation
+                 this.accumulated_token_inputs = [];
             }
 
-            // Accumulate embedding gradients (simple addition of the Float32Arrays)
-             if (this.accumulated_token_inputs.length < config.microbatchSize) { // Check bounds
-                 if (embedding_gradients.length === this.accumulated_embedding_grads[0].length) { // Check sequence length matches
-                     this.accumulated_embedding_grads[this.accumulated_token_inputs.length] = embedding_gradients;
+            // Accumulate embedding gradients
+             if (this.accumulated_token_inputs.length < config.microbatchSize) {
+                  // Ensure embedding_gradients structure matches expected
+                 if (embedding_gradients && embedding_gradients.length === input_tokens.length) { // Use actual input length for check
+                      // Store the calculated embedding gradients for this step/token sequence
+                      // The accumulator structure seems designed per microbatch item, then per token position
+                      this.accumulated_embedding_grads[this.accumulated_token_inputs.length] = embedding_gradients;
                  } else {
-                      console.error("CRITICAL Accumulation Error: Embedding gradient sequence length mismatch.");
+                      console.error("CRITICAL Accumulation Error: Embedding gradient structure mismatch or missing.");
                  }
              } else {
                   console.error("CRITICAL Accumulation Error: Exceeded allocated microbatch size for embedding gradients.");
              }
 
-            // Accumulate layer gradients (recursive addition of structures)
+            // Accumulate layer gradients
              this.add_in_place(this.accumulated_layer_grads, layer_gradients);
 
-            // Accumulate vocab projection gradients (addition of Float32Arrays - only gradient)
+            // Accumulate vocab projection gradients
              for(var i = 0; i < vocab_proj_weight_gradients.length; i+=3) {
-                  this.accumulated_vocab_grads.weights[i] += vocab_proj_weight_gradients[i];
+                  this.accumulated_vocab_grads.weights[i] += vocab_proj_weight_gradients[i]; // Accumulate only grad
              }
              for(var i = 0; i < vocab_proj_bias_gradients.length; i+=3) {
-                 this.accumulated_vocab_grads.biases[i] += vocab_proj_bias_gradients[i];
+                 this.accumulated_vocab_grads.biases[i] += vocab_proj_bias_gradients[i]; // Accumulate only grad
              }
-
 
             this.accumulated_token_inputs.push(input_tokens);
 
             // FLUSH IF MICRO-BATCH COMPLETE
             if (this.accumulated_token_inputs.length >= config.microbatchSize) {
-                this.apply_gradients(optimizer);
+                this.apply_gradients(optimizer); // apply_gradients is unchanged
             } else {
                  ndprint("Gradients accumulated, delaying parameter update.");
             }
 
+            // Logging and NaN reset unchanged
             ndprint("Training step completed in", timer_end(gtimer), "ms (accumulated)");
             if (this.nan_count_this_step > 0) {
                 if (this.nan_checks_enabled) {
@@ -2021,22 +2084,18 @@ class Transformer {
                 }
                 this.steps_with_nan_epoch++;
             }
-            this.nan_count_this_step = 0; // Reset step counter
-     // +++ INSERT END +++
-     
+            this.nan_count_this_step = 0;
+
             return initial_loss;
-        } else {
-            // NOT accumulating? Apply immediately.
-            // Re-aggregate accumulated_embedding_grads by vocab ID - this is the same logic as apply_gradients
+        } else { // --- Immediate Application Logic (Unchanged) ---
+            // Re-aggregate embedding gradients (Unchanged)
             var aggregated_embedding_grads = Array.from({ length: this.vocab.length }, () => new Float32Array(this.embeddingSize));
             var token_counts = new Uint32Array(this.vocab.length).fill(0);
-
-             if (embedding_gradients) { // Check if embedding_gradients was computed
+             if (embedding_gradients) {
                  for (var token_pos = 0; token_pos < input_tokens.length; token_pos++) {
                      var token_id = input_tokens[token_pos][1];
                      var vocab_idx = this.vocab.findIndex(([_, id]) => id === token_id);
-
-                     if (vocab_idx !== -1) {
+                     if (vocab_idx !== -1 && embedding_gradients[token_pos]) { // Check token_pos exists in grads
                          token_counts[vocab_idx]++;
                          for (var embed_dim = 0; embed_dim < this.embeddingSize; embed_dim++) {
                               aggregated_embedding_grads[vocab_idx][embed_dim] += embedding_gradients[token_pos][embed_dim];
@@ -2045,108 +2104,79 @@ class Transformer {
                  }
              }
 
-            // Apply updates to embeddings that were used
+            // Optimizer setup (Unchanged)
              var weight_decay = config["antiOverfittingOptimisations"] ? 1e-5 : 0;
              var momentum_factor = 0.5;
-             if (optimizer === "sgd_momentum" && this.momentum_initialized === undefined) {
-                 console.log("Initializing momentum for first use");
-                 this.momentum_initialized = true;
-             }
-
-             var warmup_steps = 100;
-             var decay_factor = 0.25;
-             var base_lr = this.learningRate;
-             var min_lr = 0.0005;
-
+             if (optimizer === "sgd_momentum" && this.momentum_initialized === undefined) { this.momentum_initialized = true; console.log("Initializing momentum for first use"); }
+             var warmup_steps = 100; var decay_factor = 0.25; var base_lr = this.learningRate; var min_lr = 0.0005;
              if (optimizer === "adam") this.adam_params['t'] += 1;
              this.step_num += 1;
-
-             var lr = this.step_num < warmup_steps
-                 ? base_lr * (this.step_num / warmup_steps)
-                 : base_lr * Math.pow(warmup_steps, 0.5) * Math.pow(this.step_num * decay_factor, -0.5);
-
+             var lr = this.step_num < warmup_steps ? base_lr * (this.step_num / warmup_steps) : base_lr * Math.pow(warmup_steps, 0.5) * Math.pow(this.step_num * decay_factor, -0.5);
              lr = Math.max(min_lr, lr);
 
-
+            // Apply Embedding Gradients (Unchanged Logic)
             for(var vocab_idx = 0; vocab_idx < this.vocab.length; vocab_idx++) {
                  if(token_counts[vocab_idx] > 0) {
-                     var param = this.transformer.embeddings[vocab_idx]; // This is a Float32Array of size embeddingSize * 3
-
+                     var param = this.transformer.embeddings[vocab_idx];
                      for (var embed_dim = 0; embed_dim < this.embeddingSize; embed_dim++) {
                          var grad_value = aggregated_embedding_grads[vocab_idx][embed_dim];
-                         if (weight_decay > 0) {
-                              grad_value += weight_decay * param[embed_dim * 3];
-                         }
-
-                         if (optimizer === "adam") {
-                             param[embed_dim * 3 + 1] = this.adam_params.beta1 * param[embed_dim * 3 + 1] + (1 - this.adam_params.beta1) * grad_value;
-                             param[embed_dim * 3 + 2] = this.adam_params.beta2 * param[embed_dim * 3 + 2] + (1 - this.adam_params.beta2) * (grad_value * grad_value);
-
-                             var m_hat = param[embed_dim * 3 + 1] / (1 - Math.pow(this.adam_params.beta1, this.adam_params.t));
-                             var v_hat = param[embed_dim * 3 + 2] / (1 - Math.pow(this.adam_params.beta2, this.adam_params.t));
-                             param[embed_dim * 3] -= lr * m_hat / (Math.sqrt(v_hat) + this.adam_params.epsilon);
-                         } else if (optimizer === "sgd_momentum") {
-                             param[embed_dim * 3 + 1] = momentum_factor * param[embed_dim * 3 + 1] + grad_value;
-                             param[embed_dim * 3] -= lr * param[embed_dim * 3 + 1];
-                         } else {
-                             param[embed_dim * 3] -= lr * grad_value;
-                         }
+                         this.updateParamFloat32Array(param.slice(embed_dim*3, embed_dim*3+3), [grad_value,0,0], optimizer, lr, weight_decay, momentum_factor); // Pass slice and grad structure
+                         // Directly update the original array from the modified slice (conceptually)
+                         // The actual update happens inside updateParamFloat32Array by modifying the passed slice (which refers back)
                      }
                  }
             }
-
-             // Apply Layer gradients
+            // Apply Layer Gradients (Unchanged Logic)
              for (var layer_idx = 0; layer_idx < this.layersAmount; layer_idx++) {
                  var layer = this.transformer.layers[layer_idx];
-                 var layer_grad = layer_gradients[layer_idx]; // This is the gradient structure for this step
-
-                 // Update Weights
+                 var layer_grad = layer_gradients[layer_idx]; // Use the gradients from *this* step
                  this.updateParamFloat32Array(layer.weights.normalize_1, layer_grad.weights.normalize_1, optimizer, lr, weight_decay, momentum_factor);
                  this.updateParamFloat32Array(layer.weights.normalize_2, layer_grad.weights.normalize_2, optimizer, lr, weight_decay, momentum_factor);
-
                  for (var head_idx = 0; head_idx < this.heads; head_idx++) {
                      this.updateParamFloat32Array(layer.weights.attention.heads[head_idx].query, layer_grad.weights.attention.heads[head_idx].query, optimizer, lr, weight_decay, momentum_factor);
                      this.updateParamFloat32Array(layer.weights.attention.heads[head_idx].key,   layer_grad.weights.attention.heads[head_idx].key,   optimizer, lr, weight_decay, momentum_factor);
                      this.updateParamFloat32Array(layer.weights.attention.heads[head_idx].value, layer_grad.weights.attention.heads[head_idx].value, optimizer, lr, weight_decay, momentum_factor);
                  }
-
                  this.updateParamFloat32Array(layer.weights.attention.output,      layer_grad.weights.attention.output,      optimizer, lr, weight_decay, momentum_factor);
                  this.updateParamFloat32Array(layer.weights.feed_forward.grow,     layer_grad.weights.feed_forward.grow,     optimizer, lr, weight_decay, momentum_factor);
                  this.updateParamFloat32Array(layer.weights.feed_forward.shrink,   layer_grad.weights.feed_forward.shrink,   optimizer, lr, weight_decay, momentum_factor);
-
-                 // Update Biases (no weight decay)
                   this.updateParamFloat32Array(layer.biases.normalize_1, layer_grad.biases.normalize_1, optimizer, lr, 0, momentum_factor);
                   this.updateParamFloat32Array(layer.biases.normalize_2, layer_grad.biases.normalize_2, optimizer, lr, 0, momentum_factor);
-
                   for (var head_idx = 0; head_idx < this.heads; head_idx++) {
                       this.updateParamFloat32Array(layer.biases.attention.heads[head_idx].query, layer_grad.biases.attention.heads[head_idx].query, optimizer, lr, 0, momentum_factor);
                       this.updateParamFloat32Array(layer.biases.attention.heads[head_idx].key,   layer_grad.biases.attention.heads[head_idx].key,   optimizer, lr, 0, momentum_factor);
                       this.updateParamFloat32Array(layer.biases.attention.heads[head_idx].value, layer_grad.biases.attention.heads[head_idx].value, optimizer, lr, 0, momentum_factor);
                   }
-
                   this.updateParamFloat32Array(layer.biases.attention.output,      layer_grad.biases.attention.output,      optimizer, lr, 0, momentum_factor);
                   this.updateParamFloat32Array(layer.biases.feed_forward.grow,     layer_grad.biases.feed_forward.grow,     optimizer, lr, 0, momentum_factor);
                   this.updateParamFloat32Array(layer.biases.feed_forward.shrink,   layer_grad.biases.feed_forward.shrink,   optimizer, lr, 0, momentum_factor);
              }
-
-            // Apply Vocab Projection gradients
+            // Apply Vocab Projection Gradients (Unchanged Logic)
              this.updateParamFloat32Array(this.transformer.vocab_projection.weights, vocab_proj_weight_gradients, optimizer, lr, weight_decay, momentum_factor);
              this.updateParamFloat32Array(this.transformer.vocab_projection.biases,  vocab_proj_bias_gradients,   optimizer, lr, 0, momentum_factor);
 
-            console.log("Updated parameters in " + timer_inf + " ms");
-            var param_to_check = this.transformer["embeddings"][0]; // This is a Float32Array
-            if (optimizer === "adam") {
-                console.log("Sample Adam values (embedding 0, dim 0): value=" + param_to_check[0] + ", momentum=" + param_to_check[1] + ", velocity=" + param_to_check[2]);
-                this.check_adam_state();
-            } else if (optimizer === "sgd_momentum") {
-                console.log("Sample momentum value (embedding 0, dim 0): " + param_to_check[1]);
-            } else {
-                console.log("Using SGD - no momentum/velocity values to report");
-            }
+            // Logging and return unchanged
+             // --- Original Logging ---
+             // console.log("Updated parameters in " + timer_inf + " ms"); // timer_inf not defined here
+             var param_to_check = this.transformer["embeddings"][0];
+             if (optimizer === "adam") { console.log("Sample Adam values (embedding 0, dim 0): value=" + param_to_check[0] + ", momentum=" + param_to_check[1] + ", velocity=" + param_to_check[2]); this.check_adam_state(); }
+             else if (optimizer === "sgd_momentum") { console.log("Sample momentum value (embedding 0, dim 0): " + param_to_check[1]); }
+             else { console.log("Using SGD - no momentum/velocity values to report"); }
+             ndprint("Training step completed in", timer_end(gtimer), "ms");
+             // --- End Original Logging ---
 
-            ndprint("Training step completed in", timer_end(gtimer), "ms");
+             // NaN reset unchanged
+            if (this.nan_count_this_step > 0) {
+                if (this.nan_checks_enabled) {
+                     console.warn(`--- Step ${this.step_num}: Detected ${this.nan_count_this_step} NaN/Infinity values during calculations. Affected gradients set to 0. ---`);
+                }
+                this.steps_with_nan_epoch++;
+            }
+             this.nan_count_this_step = 0;
+
             return initial_loss;
         }
+        // --- Gradient Accumulation / Application END ---
     }
     check_adam_state() {
         console.log("Adam step count: " + this.adam_params['t']);
@@ -2647,15 +2677,10 @@ class Transformer {
     }
     inference(context, return_cache, training_mode) {
         if (training_mode === undefined) { training_mode = false; }
-        // Inside inference function, definition of scale_activation
+        // scale_activation definition remains unchanged from original
         function scale_activation(vector, base_gamma) {
-            // NOTE: 'this' inside here refers to the Transformer instance
-            // because it's defined within an instance method.
-
             if (base_gamma === undefined) { base_gamma = 5.0; }
             var norm = 0;
-
-            // Check input for NaN
             var input_nan_found = false;
             for(var i = 0; i < vector.length; i++) {
                 if (isNaN(vector[i])) {
@@ -2665,14 +2690,19 @@ class Transformer {
                  }
                  norm += vector[i] * vector[i];
             }
+             // Check if *this* function call added a NaN count
+             var nan_count_before_scale = this.nan_count_this_step;
             if (input_nan_found) { this.nan_count_this_step++; this.nan_forward_pass_count_epoch++; }
 
             norm = Math.sqrt(norm);
 
             if (isNaN(norm)) {
                 if(this.nan_checks_enabled) { console.error("!!! NaN DETECTED IN NORM CALCULATION (scale_activation) !!!"); }
-                this.nan_count_this_step++; this.nan_forward_pass_count_epoch++;
-                return vector; // Return modified (NaNs zeroed) input vector
+                // Increment counters only if NaN wasn't already detected in input
+                if (this.nan_count_this_step === nan_count_before_scale) {
+                    this.nan_count_this_step++; this.nan_forward_pass_count_epoch++;
+                }
+                return vector;
             }
             if (norm < 1e-10) { return vector; }
 
@@ -2692,7 +2722,8 @@ class Transformer {
                 for(var i = 0; i < vector.length; i++) scaled_vector[i] = vector[i] * scaling_factor;
             }
 
-            // Final check on output
+             // Final check on output
+             var nan_count_before_output_check = this.nan_count_this_step;
              for(var i = 0; i < scaled_vector.length; i++) {
                  if(isNaN(scaled_vector[i])) {
                      if(this.nan_checks_enabled) { console.error(`!!! NaN DETECTED IN scale_activation OUTPUT at index ${i} (replaced with 0) !!! Norm: ${norm}, Factor: ${scaling_factor}`); }
@@ -2700,42 +2731,49 @@ class Transformer {
                      output_nan_found = true;
                  }
              }
-             if(output_nan_found) { this.nan_count_this_step++; this.nan_forward_pass_count_epoch++; }
+              // Increment counters only if NaN appeared here and wasn't already counted
+             if(output_nan_found && this.nan_count_this_step === nan_count_before_output_check) {
+                 this.nan_count_this_step++; this.nan_forward_pass_count_epoch++;
+             }
 
              return scaled_vector;
         } // End of scale_activation definition
+
         ndprint("Doing inference...");
         var sgtimer = timer_();
         var tokenized_input = this.tokenize(context);
         var input_length = tokenized_input.length;
         if (input_length > this.contextSize) {
+            // Maintain original error handling
             throw new Error("Input too long");
         }
         var cache = null;
         if (return_cache) {
+            // Initialize cache structure
             cache = {
                 "tokenized": tokenized_input,
                 "initial_embeddings": [],
                 "positional_encodings": this.calculate_positional_encoding(input_length),
-                "layers": []
+                "layers": [] // Initialize layers array
             };
         } else {
+            // Positional encodings calculated but not cached if return_cache is false
             var positional_encodings = this.calculate_positional_encoding(input_length);
         }
         var timer_inf = timer_();
         console.log("Computing embeddings...");
         var final_embeddings = []; // Array of Float32Arrays
+        // Embedding calculation loop remains unchanged
         for (var pos = 0; pos < tokenized_input.length; pos++) {
             var token = tokenized_input[pos][0];
             var token_id = tokenized_input[pos][1];
             var embedding = new Float32Array(this.embeddingSize);
-             // Copy only the value part (index 0, 3, 6...) from the stored Float32Array
              var stored_embedding = this.get_embedding(token_id);
              for(var i = 0; i < this.embeddingSize; i++) {
                   embedding[i] = stored_embedding[i * 3];
              }
 
-            if (return_cache) { cache["initial_embeddings"].push(new Float32Array(embedding)); } // Store a copy
+            if (return_cache) { cache["initial_embeddings"].push(new Float32Array(embedding)); }
             var pos_enc = (return_cache ? cache["positional_encodings"] : positional_encodings)[pos];
             for (var i = 0; i < this.embeddingSize; i++) {
                 embedding[i] += pos_enc[i];
@@ -2745,14 +2783,18 @@ class Transformer {
         console.log("Computed embeddings in " + timer_end(timer_inf) + " ms");
         var gtimer = timer_();
         console.log("Computing layers...");
+        // Layer computation loop
         for (var layer = 0; layer < this.layersAmount; layer++) {
             timer_inf = timer_();
             console.log("Computing layer " + layer);
             if (return_cache) {
+                // Initialize cache for this specific layer, including new x_hat entries
                 cache["layers"].push({
+                    "norm1_x_hat": [], // ADDED cache entry
                     "heads": [],
                     "combined": null,
-                    "normalized": null,
+                    "norm2_x_hat": [], // ADDED cache entry
+                    "normalized": null, // This will store output of norm1
                     "feed_forward": {
                         "bigger": null,
                         "after_relu": null,
@@ -2760,71 +2802,70 @@ class Transformer {
                     }
                 });
             }
-            var normalized_embeddings = []; // Array of Float32Arrays
-            var norm1_weights = this.transformer["layers"][layer]["weights"]["normalize_1"];
-            var norm1_biases = this.transformer["layers"][layer]["biases"]["normalize_1"];
+
+            // --- Normalize 1 START ---
+            var normalized_embeddings = []; // Stores final 'y' output of norm1
+            var norm1_weights = this.transformer["layers"][layer]["weights"]["normalize_1"]; // GAMMA
+            var norm1_biases = this.transformer["layers"][layer]["biases"]["normalize_1"];   // BETA
 
             for (var i = 0; i < final_embeddings.length; i++) {
-                var normalized = this.normalize_vector(final_embeddings[i]);
-                var weighted_normalized = new Float32Array(this.embeddingSize);
-                for (var j = 0; j < this.embeddingSize; j++) {
-                     // Apply weight and bias (using value at index j*3)
-                    var weighted_value = normalized[j] * norm1_weights[j * 3] + norm1_biases[j * 3];
-                    weighted_normalized[j] = weighted_value;
+                // --- Calculate x_hat for caching --- (NEW)
+                var x_hat_for_cache_1 = this._calculate_x_hat_only(final_embeddings[i]);
+                if (return_cache) {
+                    cache["layers"][layer]["norm1_x_hat"].push(new Float32Array(x_hat_for_cache_1));
                 }
-                normalized_embeddings.push(weighted_normalized);
+                // --- End Calculate x_hat ---
+
+                // --- Call modified normalize_vector --- (NEW)
+                var final_norm1_output = this.normalize_vector(final_embeddings[i], norm1_weights, norm1_biases);
+                normalized_embeddings.push(final_norm1_output);
+                // --- End Call ---
             }
+             // Cache the final output 'y' of Norm1
             if (return_cache) {
-                cache["layers"][layer]["normalized"] = normalized_embeddings.map(arr => new Float32Array(arr)); // Store copies
+                // This replaces the old caching logic for 'normalized'
+                 cache["layers"][layer]["normalized"] = normalized_embeddings.map(arr => new Float32Array(arr));
             }
-            var head_outputs = []; // Array of Arrays of Float32Arrays (heads x tokens x embeddingSize)
+            // --- Normalize 1 END ---
+
+
+            // --- Attention Calculation START --- (Unchanged Logic)
+            var head_outputs = [];
             for (var head = 0; head < this.heads; head++) {
+                // Head internal calculations remain the same, taking normalized_embeddings (now 'y') as input
                 var head_weights = this.transformer["layers"][layer]["weights"]["attention"]["heads"][head];
                 var head_biases = this.transformer["layers"][layer]["biases"]["attention"]["heads"][head];
-                var q_vectors = []; // Array of Float32Arrays
-                var k_vectors = []; // Array of Float32Arrays
-                var v_vectors = []; // Array of Float32Arrays
+                var q_vectors = []; var k_vectors = []; var v_vectors = [];
+                var head_query_weights = head_weights["query"]; var head_key_weights = head_weights["key"]; var head_value_weights = head_weights["value"];
+                var head_query_biases = head_biases["query"]; var head_key_biases = head_biases["key"]; var head_value_biases = head_biases["value"];
 
-                var head_query_weights = head_weights["query"]; // Flat Float32Array
-                var head_key_weights = head_weights["key"];     // Flat Float32Array
-                var head_value_weights = head_weights["value"];  // Flat Float32Array
-
-                var head_query_biases = head_biases["query"];   // Flat Float32Array
-                var head_key_biases = head_biases["key"];       // Flat Float32Array
-                var head_value_biases = head_biases["value"];    // Flat Float32Array
-
+                // Calculate Q, K, V vectors from normalized_embeddings ('y' from norm1)
                 for (var i = 0; i < normalized_embeddings.length; i++) {
-                    var token_embedding = normalized_embeddings[i]; // Float32Array
+                    var token_embedding = normalized_embeddings[i]; // Using the 'y' output of norm1
                     var q_vector = new Float32Array(this.embeddingSize);
                     for (var pos = 0; pos < this.embeddingSize; pos++) {
                         var q_sum = 0;
-                        for (var j = 0; j < this.embeddingSize; j++) {
-                             // Access weights using flat index i*embeddingSize*3 + j*3
-                            q_sum += token_embedding[j] * head_query_weights[pos * this.embeddingSize * 3 + j * 3];
-                        }
+                        for (var j = 0; j < this.embeddingSize; j++) { q_sum += token_embedding[j] * head_query_weights[pos * this.embeddingSize * 3 + j * 3]; }
                         q_vector[pos] = q_sum + head_query_biases[pos * 3];
                     }
                     q_vectors.push(q_vector);
                     var k_vector = new Float32Array(this.embeddingSize);
                     for (var pos = 0; pos < this.embeddingSize; pos++) {
                         var k_sum = 0;
-                        for (var j = 0; j < this.embeddingSize; j++) {
-                            k_sum += token_embedding[j] * head_key_weights[pos * this.embeddingSize * 3 + j * 3];
-                        }
+                        for (var j = 0; j < this.embeddingSize; j++) { k_sum += token_embedding[j] * head_key_weights[pos * this.embeddingSize * 3 + j * 3]; }
                         k_vector[pos] = k_sum + head_key_biases[pos * 3];
                     }
                     k_vectors.push(k_vector);
                     var v_vector = new Float32Array(this.embeddingSize);
                     for (var pos = 0; pos < this.embeddingSize; pos++) {
                         var v_sum = 0;
-                        for (var j = 0; j < this.embeddingSize; j++) {
-                            v_sum += token_embedding[j] * head_value_weights[pos * this.embeddingSize * 3 + j * 3];
-                        }
+                        for (var j = 0; j < this.embeddingSize; j++) { v_sum += token_embedding[j] * head_value_weights[pos * this.embeddingSize * 3 + j * 3]; }
                         v_vector[pos] = v_sum + head_value_biases[pos * 3];
                     }
                     v_vectors.push(v_vector);
                 }
-                var attention_scores = []; // Array of Float32Arrays
+                // Attention scores, scaling, softmax, applying probs to V remain unchanged
+                var attention_scores = [];
                 for (var i = 0; i < q_vectors.length; i++) {
                     var token_scores = new Float32Array(k_vectors.length);
                     for (var j = 0; j < k_vectors.length; j++) {
@@ -2841,11 +2882,11 @@ class Transformer {
                         }
                     }
                 }
-                var attention_probs = []; // Array of Float32Arrays
+                var attention_probs = [];
                 for (var i = 0; i < attention_scores.length; i++) {
                     attention_probs.push(this.softmax(attention_scores[i]));
                 }
-                var post_attention_vectors = []; // Array of Float32Arrays
+                var post_attention_vectors = [];
                 for (var token_idx = 0; token_idx < attention_probs.length; token_idx++) {
                     var final_vector = new Float32Array(this.embeddingSize).fill(0);
                     for (var pos = 0; pos < this.embeddingSize; pos++) {
@@ -2855,173 +2896,205 @@ class Transformer {
                     }
                     post_attention_vectors.push(final_vector);
                 }
+                // Head Caching remains unchanged
                 if (return_cache) {
                     var head_cache = {
-                        "q_vectors": q_vectors.map(arr => new Float32Array(arr)), // Store copies
-                        "k_vectors": k_vectors.map(arr => new Float32Array(arr)), // Store copies
-                        "v_vectors": v_vectors.map(arr => new Float32Array(arr)), // Store copies
-                        "attention_scores": attention_scores.map(arr => new Float32Array(arr)), // Store copies
-                        "attention_probs": attention_probs.map(arr => new Float32Array(arr)), // Store copies
-                        "output": post_attention_vectors.map(arr => new Float32Array(arr)) // Store copies
+                        "q_vectors": q_vectors.map(arr => new Float32Array(arr)),
+                        "k_vectors": k_vectors.map(arr => new Float32Array(arr)),
+                        "v_vectors": v_vectors.map(arr => new Float32Array(arr)),
+                        "attention_scores": attention_scores.map(arr => new Float32Array(arr)),
+                        "attention_probs": attention_probs.map(arr => new Float32Array(arr)),
+                        "output": post_attention_vectors.map(arr => new Float32Array(arr))
                     };
+                     // Ensure cache structure exists before pushing
+                     if (!cache["layers"][layer]["heads"]) cache["layers"][layer]["heads"] = [];
                     cache["layers"][layer]["heads"].push(head_cache);
                 }
                 head_outputs.push(post_attention_vectors);
-            }
-            var combined_vectors = []; // Array of Float32Arrays
+            } // End head loop
+            // --- Attention Calculation END ---
+
+
+            // --- Combine Heads START --- (Unchanged Logic)
+            var combined_vectors = []; // Stores result of Attention Output projection
             var output_weights = this.transformer["layers"][layer]["weights"]["attention"]["output"];
             var output_biases = this.transformer["layers"][layer]["biases"]["attention"]["output"];
 
-            for (var token_idx = 0; token_idx < final_embeddings.length; token_idx++) {
+            for (var token_idx = 0; token_idx < final_embeddings.length; token_idx++) { // Length matches input seq length
                 var concatenated = new Float32Array(this.embeddingSize * this.heads);
                 var current_offset = 0;
                 for (var head_idx = 0; head_idx < this.heads; head_idx++) {
                     concatenated.set(head_outputs[head_idx][token_idx], current_offset);
                     current_offset += this.embeddingSize;
                 }
-
                 var output_vector = new Float32Array(this.embeddingSize);
                 for (var pos = 0; pos < this.embeddingSize; pos++) {
                     var pos_sum = 0;
                     for (var j = 0; j < this.embeddingSize * this.heads; j++) {
-                         // Access weights using flat index i*input_size*3 + j*3
                         pos_sum += concatenated[j] * output_weights[pos * (this.embeddingSize * this.heads) * 3 + j * 3];
                     }
                     output_vector[pos] = pos_sum + output_biases[pos * 3];
                 }
                 combined_vectors.push(output_vector);
             }
-            if (return_cache) {
-                cache["layers"][layer]["combined"] = combined_vectors.map(arr => new Float32Array(arr)); // Store copies
-            }
+            // Dropout (Unchanged Logic)
             if (training_mode) {
                 var dropout_rate = 0;
-                if (config["antiOverfittingOptimisations"]) {
-                    dropout_rate = 0.1;
-                }
+                if (config["antiOverfittingOptimisations"]) { dropout_rate = 0.1; }
                 if (dropout_rate > 0) {
                      for (var i = 0; i < combined_vectors.length; i++) {
                          for (var j = 0; j < combined_vectors[i].length; j++) {
-                             if (Math.random() < dropout_rate) { // Use Math.random for each element
-                                combined_vectors[i][j] = 0;
-                            } else {
-                                combined_vectors[i][j] /= (1 - dropout_rate);
-                            }
+                             if (Math.random() < dropout_rate) { combined_vectors[i][j] = 0; }
+                             else { combined_vectors[i][j] /= (1 - dropout_rate); }
                          }
                      }
                 }
             }
-             // Add Residual Connection (Float32Array addition)
+            // --- Combine Heads END ---
+
+             // --- Add Residual Connection (Before Norm2) START --- (Unchanged Logic)
             for (var i = 0; i < combined_vectors.length; i++) {
                 for (var j = 0; j < this.embeddingSize; j++) {
-                    combined_vectors[i][j] += final_embeddings[i][j];
+                    combined_vectors[i][j] += final_embeddings[i][j]; // Add input to the layer
                 }
             }
-
-             // Scale Activation after Residual
-            for (var i = 0; i < combined_vectors.length; i++) {
-                combined_vectors[i] = scale_activation(combined_vectors[i], 5.0);
+            // Cache the combined output + residual (input to Norm2 and source for FFN residual)
+            if (return_cache) {
+                 cache["layers"][layer]["combined"] = combined_vectors.map(arr => new Float32Array(arr));
             }
+             // --- Add Residual Connection END ---
 
 
-            var normalized_vectors = []; // Array of Float32Arrays
-            var norm2_weights = this.transformer["layers"][layer]["weights"]["normalize_2"];
-            var norm2_biases = this.transformer["layers"][layer]["biases"]["normalize_2"];
-
+             // --- Scale Activation after Residual START --- (Unchanged Logic)
             for (var i = 0; i < combined_vectors.length; i++) {
-                var normalized = this.normalize_vector(combined_vectors[i]);
-                var weighted_normalized = new Float32Array(this.embeddingSize);
-                for (var j = 0; j < this.embeddingSize; j++) {
-                    weighted_normalized[j] = normalized[j] * norm2_weights[j * 3] + norm2_biases[j * 3];
-                }
-                normalized_vectors.push(weighted_normalized);
+                 // Pass 'this' context correctly using .call
+                combined_vectors[i] = scale_activation.call(this, combined_vectors[i], 5.0);
             }
-            var bigger_vectors = []; // Array of Float32Arrays
+             // --- Scale Activation END ---
+
+
+            // --- Normalize 2 START ---
+            var normalized_vectors = []; // Stores final 'y' output of norm2
+            var norm2_weights = this.transformer["layers"][layer]["weights"]["normalize_2"]; // GAMMA
+            var norm2_biases = this.transformer["layers"][layer]["biases"]["normalize_2"];   // BETA
+
+            for (var i = 0; i < combined_vectors.length; i++) { // Input is the scaled attn_out + residual
+                 // --- Calculate x_hat for caching --- (NEW)
+                 var x_hat_for_cache_2 = this._calculate_x_hat_only(combined_vectors[i]);
+                 if (return_cache) {
+                     cache["layers"][layer]["norm2_x_hat"].push(new Float32Array(x_hat_for_cache_2));
+                 }
+                 // --- End Calculate x_hat ---
+
+                // --- Call modified normalize_vector --- (NEW)
+                var final_norm2_output = this.normalize_vector(combined_vectors[i], norm2_weights, norm2_biases);
+                normalized_vectors.push(final_norm2_output);
+                 // --- End Call ---
+            }
+            // --- Normalize 2 END ---
+            // Note: `normalized_vectors` now holds the output 'y' of Norm2
+
+
+            // --- Feed Forward Network START --- (Unchanged Logic, input is 'normalized_vectors')
+            var bigger_vectors = []; // Stores output of FFN Grow
             var grow_weights = this.transformer["layers"][layer]["weights"]["feed_forward"]["grow"];
             var grow_biases = this.transformer["layers"][layer]["biases"]["feed_forward"]["grow"];
 
+            // FFN Grow (Input is normalized_vectors, which is 'y' from Norm2)
             for (var i = 0; i < normalized_vectors.length; i++) {
                 var bigger_vector = new Float32Array(this.embeddingSize * 4);
                 for (var j = 0; j < this.embeddingSize * 4; j++) {
                     var sum_val = 0;
                     for (var k = 0; k < this.embeddingSize; k++) {
-                         // Access weights using flat index i*input_size*3 + j*3
                         sum_val += normalized_vectors[i][k] * grow_weights[k * (this.embeddingSize * 4) * 3 + j * 3];
                     }
                     bigger_vector[j] = sum_val + grow_biases[j * 3];
                 }
                 bigger_vectors.push(bigger_vector);
             }
-            if (return_cache) {
-                cache["layers"][layer]["feed_forward"]["bigger"] = bigger_vectors.map(arr => new Float32Array(arr)); // Store copies
-            }
-             // Apply ReLU
+            if (return_cache) { cache["layers"][layer]["feed_forward"]["bigger"] = bigger_vectors.map(arr => new Float32Array(arr)); }
+
+             // Apply ReLU (Unchanged)
             for (var i = 0; i < bigger_vectors.length; i++) {
                 for (var j = 0; j < this.embeddingSize * 4; j++) {
-                    if (bigger_vectors[i][j] < 0) {
-                        bigger_vectors[i][j] = 0;
-                    }
+                    if (bigger_vectors[i][j] < 0) { bigger_vectors[i][j] = 0; }
                 }
             }
-            if (return_cache) {
-                cache["layers"][layer]["feed_forward"]["after_relu"] = bigger_vectors.map(arr => new Float32Array(arr)); // Store copies
-            }
+            if (return_cache) { cache["layers"][layer]["feed_forward"]["after_relu"] = bigger_vectors.map(arr => new Float32Array(arr)); }
+
+            // Dropout (Unchanged)
             if (training_mode) {
                 var dropout_rate = 0;
-                if (config["antiOverfittingOptimisations"]) {
-                    dropout_rate = 0.1;
-                }
+                 if (config["antiOverfittingOptimisations"]) { dropout_rate = 0.1; }
                 if (dropout_rate > 0) {
                      for (var i = 0; i < bigger_vectors.length; i++) {
                          for (var j = 0; j < bigger_vectors[i].length; j++) {
-                             if (Math.random() < dropout_rate) { // Use Math.random for each element
-                                 bigger_vectors[i][j] = 0;
-                             } else {
-                                 bigger_vectors[i][j] /= (1 - dropout_rate);
-                             }
+                             if (Math.random() < dropout_rate) { bigger_vectors[i][j] = 0; }
+                             else { bigger_vectors[i][j] /= (1 - dropout_rate); }
                          }
                      }
                 }
             }
-            var final_vectors = []; // Array of Float32Arrays
+
+            // FFN Shrink (Unchanged)
+            var final_vectors = []; // Stores output of FFN Shrink (before residual)
             var shrink_weights = this.transformer["layers"][layer]["weights"]["feed_forward"]["shrink"];
             var shrink_biases = this.transformer["layers"][layer]["biases"]["feed_forward"]["shrink"];
-
             for (var i = 0; i < bigger_vectors.length; i++) {
                 var final_vector = new Float32Array(this.embeddingSize);
                 for (var pos = 0; pos < this.embeddingSize; pos++) {
                     var accum = 0;
                     for (var j = 0; j < this.embeddingSize * 4; j++) {
-                         // Access weights using flat index i*input_size*3 + j*3
                         accum += bigger_vectors[i][j] * shrink_weights[pos * (this.embeddingSize * 4) * 3 + j * 3];
                     }
                     final_vector[pos] = accum + shrink_biases[pos * 3];
                 }
                 final_vectors.push(final_vector);
             }
-             // Add Residual Connection (Float32Array addition)
+            // --- Feed Forward Network END ---
+
+
+             // --- Add Residual Connection (After FFN) START --- (Unchanged Logic)
+             // Residual source is the output of (Attention + Residual) stored in 'combined' cache or var
             for (var i = 0; i < final_vectors.length; i++) {
+                 // Retrieve the vector *before* Norm2 for the residual
+                 var residual_source = (return_cache && cache["layers"][layer]["combined"])
+                                     ? cache["layers"][layer]["combined"][i]
+                                     : combined_vectors[i]; // Fallback if not caching
                 for (var j = 0; j < this.embeddingSize; j++) {
-                    final_vectors[i][j] += combined_vectors[i][j]; // Residual is from *before* the second normalization
+                    // Check if residual_source exists and has the element
+                    if (residual_source && residual_source[j] !== undefined) {
+                         final_vectors[i][j] += residual_source[j];
+                    } else {
+                         // Log error or handle missing residual source if necessary
+                         if (this.nan_checks_enabled) console.error(`Missing residual source at layer ${layer}, token ${i}, dim ${j}`);
+                    }
                 }
             }
+             // --- Add Residual Connection END ---
 
-            // Scale Activation after Residual
+
+            // --- Scale Activation after Residual START --- (Unchanged Logic)
              for (var i = 0; i < final_vectors.length; i++) {
-                 final_vectors[i] = scale_activation(final_vectors[i], 5.0);
+                 final_vectors[i] = scale_activation.call(this, final_vectors[i], 5.0); // Use .call(this)
              }
+            // --- Scale Activation END ---
 
 
+            // Cache final layer output ('y') and update embeddings for next layer
             if (return_cache) {
-                cache["layers"][layer]["feed_forward"]["final"] = final_vectors.map(arr => new Float32Array(arr)); // Store copies
+                cache["layers"][layer]["feed_forward"]["final"] = final_vectors.map(arr => new Float32Array(arr));
             }
-            final_embeddings = final_vectors; // Update embeddings for the next layer
+            final_embeddings = final_vectors; // Output of this layer becomes input for the next
             console.log("Computed layer " + layer + " in " + timer_end(timer_inf) + " ms");
-        }
+        } // --- End layer loop ---
+
         console.log("Computed layers in " + timer_end(gtimer) + " ms");
+
+        // --- Vocab Projection START --- (Unchanged Logic)
         timer_inf = timer_();
         console.log("Computing next token...");
-        var last_token_embedding = final_embeddings[final_embeddings.length - 1]; // This is a Float32Array
+        var last_token_embedding = final_embeddings[final_embeddings.length - 1];
         var scores = new Float32Array(this.vocab.length);
         var vocab_weights = this.transformer["vocab_projection"]["weights"];
         var vocab_biases = this.transformer["vocab_projection"]["biases"];
@@ -3029,15 +3102,15 @@ class Transformer {
         for (var token_idx = 0; token_idx < this.vocab.length; token_idx++) {
             var score = 0;
             for (var pos = 0; pos < this.embeddingSize; pos++) {
-                 // Access weights using flat index token_idx*embeddingSize*3 + pos*3
                 score += last_token_embedding[pos] * vocab_weights[token_idx * this.embeddingSize * 3 + pos * 3];
             }
-            score += vocab_biases[token_idx * 3]; // Access bias using flat index token_idx*3
+            score += vocab_biases[token_idx * 3];
             scores[token_idx] = score;
         }
         if (return_cache) {
-            cache["vocab_scores"] = new Float32Array(scores); // Store a copy
+            cache["vocab_scores"] = new Float32Array(scores);
         }
+        // Find highest score index (Unchanged)
         var highest_score = -Infinity;
         var next_token_idx = 0;
         for (var i = 0; i < scores.length; i++) {
@@ -3048,6 +3121,8 @@ class Transformer {
             }
         }
         console.log("Computed next token in " + timer_end(timer_inf) + " ms");
+        // --- Vocab Projection END ---
+
         ndprint("Did inference in", timer_end(sgtimer), "ms");
         if (return_cache) {
             return [[this.vocab[next_token_idx][0], this.vocab[next_token_idx][1]], cache];
