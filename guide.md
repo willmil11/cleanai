@@ -31,7 +31,7 @@ And a polished help messsage will present itself to you, it may look distorted a
 The config is a json file as you the help message from the cli suggested, It's structure is slightly different for a new model and a loaded model but the comments should explain that (a config is not required for a loaded model if you're not pre-training or training it further as the help message from the cli suggests).
 <br><br>
 Example structure for a model:
-```json
+```jsonc
 {
     "pre-training-paths": [ //Only required if you use the --pretrain flag
         "/path/to/pretraining-data.txt",
@@ -74,7 +74,7 @@ Here's what each parameter is for:
 
 ## Dataset
 Dataset should be a json file with the following structure:
-```json
+```jsonc
 [
     { //pair 1
         "inputs": ["input1", "input2", ...],

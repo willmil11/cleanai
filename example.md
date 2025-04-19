@@ -12,7 +12,7 @@ If you haven't already installed the cli tool, you can simply run the following 
 npm install -g cleanai
 ```
 Then you can create a dataset.json file with the following contents:
-```json
+```jsonc
 [
     {
         "inputs": ["Hey!"],
@@ -57,7 +57,7 @@ Then you can create a dataset.json file with the following contents:
 ]
 ```
 After you've done this create a simple config.json file with the following contents:
-```json
+```jsonc
 {
     "training-dataset-path": "dataset.json",
     "pre-train-epochs": 1000,
@@ -112,7 +112,7 @@ You will need to remove the following parameters from the config, you can tweak 
 - biasesinitrange
 
 This will result in this if you don't do any tweaks from the original example config:
-```json
+```jsonc
 {
     "training-dataset-path": "dataset.json",
     "pre-train-epochs": 1000,
