@@ -8,13 +8,8 @@
     "pre-train-optimizer": "adam",
     "train-optimizer": "adam",
     "contextSize": 128,
-    "embeddingSize": 128,
-    "learningRate": 0.001,
+    "learningRate": 0.0001,
     "maxOutputSize": 16,
-    "layersAmount": 4,
-    "heads": 4,
     "microbatchSize": 24,
-    "biasesinitrange": [-0.01, 0.01],
-    "embeddinginitrange": [-0.1, 0.1],
     "antiOverfittingOptimisations": true
 }

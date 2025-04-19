@@ -1,4 +1,6 @@
-// app.js
+#!/usr/bin/env node
+
+// cleanai.js
 //
 //* It is way better to download the better comments extension for vscode to view this file because
 //* it adds color to the comments depending on how much you should read them thanks to the little symbols
@@ -23,8 +25,34 @@ var json = JSON;
 var path = require("path");
 var os = require("os");
 var readline = require("readline");
-const { validateHeaderValue } = require("http");
 var spawnchild = require("child_process").spawn;
+
+var hasExposeGC = process.execArgv.includes('--expose-gc');
+var hasMemoryLimit = process.execArgv.some(function(arg) {
+    return arg.startsWith('--max-old-space-size=');
+});
+
+// This value is a meme and will work fine until Node panics or the kernel screams
+// - Chatgpt 4o 19.04.2025
+var desiredMemFlag = '--max-old-space-size=9999999999999';
+
+if (!hasExposeGC || !hasMemoryLimit) {
+    var newArgs = [
+        !hasMemoryLimit ? desiredMemFlag : null,
+        !hasExposeGC ? '--expose-gc' : null
+    ]
+    .concat(process.execArgv)
+    .concat([process.argv[1]])
+    .concat(process.argv.slice(2))
+    .filter(Boolean); // Remove nulls
+
+    spawnchild(process.argv[0], newArgs, { stdio: 'inherit' })
+        .on('exit', function(code) {
+            process.exit(code);
+        });
+
+    return; // Let the child process take over
+}
 
 var readline_async_synclike = async function(query){
     return await new Promise((resolve) => {
@@ -228,20 +256,30 @@ var resolveDependency = async function(dependency){
             issue = "No args found.";
         }
         function spacing() {
-            return " ".repeat(("node " + process.argv[1]).length);
+            return " ".repeat(("cleanai").length);
         }
         console.log("=====" + "=".repeat(issue.length) + "=====");
         console.log("==== " + issue + " ====");
         console.log("=====" + "=".repeat(issue.length) + "=====");
         console.log("");
-        console.log("node " + process.argv[1] + " --new");
+        console.log("cleanai" + " --new");
         console.log(spacing() + " ".repeat(" --new".length) + "--config path/to/config.json");
         console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + "--train");
-        console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + " ".repeat("--pretrain".length) + "--pretrain");
+        console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + " ".repeat("--pretrain".length) + "[--pretrain]");
         console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + "--pretrain");
-        console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + " ".repeat("--pretrain".length) + "--train");
+        console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + " ".repeat("--pretrain".length) + "[--train]");
         console.log(spacing() + " --load path/to/model.zip");
+        console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + "[--config path/to/config.json]");
+        console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + "[--train]");
+        console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + " ".repeat("[--train]".length) + "   [--pretrain]");
+        console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + "[--pretrain]");
+        console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + " ".repeat("[--pretrain]".length) + "[--train]");
+        
         console.log("");
+        
+        console.log("Note: Arguments between square brackets ([...]) are optional.");
+        
+        //console.log("")
     }
 
     var flag = null;
@@ -419,6 +457,23 @@ var resolveDependency = async function(dependency){
         }
     }
 
+    if (args.indexOf("--load") !== -1){
+        if (args.indexOf("--train") !== -1) {
+            if (args.indexOf("--config") === -1) {
+                help("You need to specify a config file with --config.");
+                process.exit(0);
+            }
+        }
+        else{
+            if (args.indexOf("--pretrain") !== -1) {
+                if (args.indexOf("--config") === -1) {
+                    help("You need to specify a config file with --config.");
+                    process.exit(0);
+                }
+            }
+        }
+    }
+
     if (args.indexOf("--new") === -1 && args.indexOf("--load") === -1) {
         help("You need to specify either --new or --load.");
         process.exit(0);
@@ -429,7 +484,7 @@ var resolveDependency = async function(dependency){
     }
 
     console.log("Arguments parsed successfully.");
-    if (args.indexOf("--new") !== -1) {
+    if (config__) {
         console.log("Reading and loading config file...");
         var configtoparse;
         try {
@@ -450,160 +505,167 @@ var resolveDependency = async function(dependency){
             console.log("Exiting...");
             process.exit(1);
         }
-        var keys = ["pre-training-paths", "training-dataset-path", "contextSize", "embeddingSize", "learningRate", "maxOutputSize", "layersAmount", "heads", "biasesinitrange", "embeddinginitrange"];
 
-        for (var k = 0; k < keys.length; k++) {
-            var key = keys[k];
-            if (key === "pre-training-paths" || key === "training-dataset-path") {
-                if (pretraining__ === null && training__ === null) {
-                    console.log("Config file missing parameter " + key + ", add it.");
-                    console.log("Exiting...");
-                    process.exit(1);
+        //key logic to check:
+        //if new model aka if flag is true:
+        //  pre-training-paths must be an array of string(s) (must contain at least one string), every string in the array must lead to an existing txt file
+        //  training-dataset-path must be a string that leads to an existing json file
+        //  train-epochs must be an int >0
+        //  pre-train-optimizer must be a string, can only be adam, sgd_momentum or sgd
+        //  train-optimizer must be a string, can only be adam, sgd_momentum or sgd
+        //  contextSize must be an int >0
+        //  embeddingSize must be an int>0
+        //  learningRate must be a float >0
+        //  maxOutputSize must be an int >0
+        //  layersAmount must be an int >0
+        //  heads must be an int >0
+        //  microbatchSize must be an int >0
+        //  biasesinitrange must be an array of two floats >0
+        //  embeddinginitrange must be an array of two floats >0
+        //  antiOverfittingOptimisations must be a boolean
+        //if loaded model aka if flag is false:
+        //  then everything must remain the same except it is invalid to provide the following options:
+        //    embeddingSize
+        //    layersAmount
+        //    heads
+        //    biasesinitrange
+        //    embeddinginitrange
+
+        // Validate configtoparse for required fields and types
+
+        var isInt = function(n) {
+            return typeof n === "number" && isFinite(n) && Math.floor(n) === n;
+        };
+        var isFloat = function(n) {
+            return typeof n === "number" && isFinite(n);
+        };
+        var isString = function(s) {
+            return typeof s === "string";
+        };
+        var isBool = function(b) {
+            return typeof b === "boolean";
+        };
+        var isArray = function(a) {
+            return Array.isArray(a);
+        };
+        var fileExists = function(path) {
+            try {
+                return fs.existsSync(path);
+            } catch (e) {
+                return false;
+            }
+        };
+
+        // If --new, validate all required fields for new model
+        // Otherwise, validate for loaded model (less strict)
+        var isNew = args.indexOf("--new") !== -1;
+
+        // Helper for error
+        var configError = function(msg) {
+            console.log("Config validation error: " + msg);
+            process.exit(1);
+        };
+
+        // Required for both new and loaded
+        // Only require pre-training-paths if --pretrain flag is present
+        var needsPretrain = args.indexOf("--pretrain") !== -1;
+        if (needsPretrain) {
+            if (!isArray(configtoparse["pre-training-paths"]) || configtoparse["pre-training-paths"].length < 1) {
+                configError("pre-training-paths must be a non-empty array of strings.");
+            }
+            for (var i = 0; i < configtoparse["pre-training-paths"].length; i++) {
+                var p = configtoparse["pre-training-paths"][i];
+                if (!isString(p)) {
+                    configError("pre-training-paths must only contain strings.");
                 }
-            } else {
-                if (!(key in configtoparse)) {
-                    console.log("Config file missing parameter " + key + ", add it.");
-                    console.log("Exiting...");
-                    process.exit(1);
-                } else {
-                    if (pretraining__) {
-                        if (key === "pre-training-paths") {
-                            if (!(Array.isArray(configtoparse[key]))) {
-                                console.log("Config file parameter " + key + " must be an array of strings, not a " + typeof configtoparse[key]);
-                                process.exit(1);
-                            }
-                            for (var j = 0; j < configtoparse[key].length; j++) {
-                                if (typeof configtoparse[key][j] !== "string") {
-                                    console.log("Config file parameter " + key + " must be an array of strings, not an array of " + typeof configtoparse[key][j]);
-                                    process.exit(1);
-                                }
-                            }
-                        }
-                    }
-                    if (training__) {
-                        if (key === "training-dataset-path") {
-                            if (typeof configtoparse[key] !== "string") {
-                                console.log("Config file parameter " + key + " must be a string, not a " + typeof configtoparse[key]);
-                                process.exit(1);
-                            }
-                        }
-                    }
-                    if (key === "contextSize") {
-                        if (typeof configtoparse[key] !== "number" || Math.floor(configtoparse[key]) !== configtoparse[key]) {
-                            console.log("Config file parameter " + key + " must be an int, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                    }
-                    if (key === "embeddingSize") {
-                        if (typeof configtoparse[key] !== "number" || Math.floor(configtoparse[key]) !== configtoparse[key]) {
-                            console.log("Config file parameter " + key + " must be an int, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                    }
-                    if (key === "learningRate") {
-                        if (typeof configtoparse[key] !== "number") {
-                            console.log("Config file parameter " + key + " must be a float, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                    }
-                    if (key === "maxOutputSize") {
-                        if (typeof configtoparse[key] !== "number" || Math.floor(configtoparse[key]) !== configtoparse[key]) {
-                            console.log("Config file parameter " + key + " must be an int, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                    }
-                    if (key === "layersAmount") {
-                        if (typeof configtoparse[key] !== "number" || Math.floor(configtoparse[key]) !== configtoparse[key]) {
-                            console.log("Config file parameter " + key + " must be an int, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                    }
-                    if (key === "heads") {
-                        if (typeof configtoparse[key] !== "number" || Math.floor(configtoparse[key]) !== configtoparse[key]) {
-                            console.log("Config file parameter " + key + " must be an int, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                    }
-                    if (key === "biasesinitrange") {
-                        if (!Array.isArray(configtoparse[key])) {
-                            console.log("Config file parameter " + key + " must be an array of two floats, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                        if (configtoparse[key].length !== 2) {
-                            console.log("Config file parameter " + key + " must be an array of two floats, not an array of " + configtoparse[key].length + " floats");
-                            process.exit(1);
-                        }
-                        for (var j = 0; j < configtoparse[key].length; j++) {
-                            if (typeof configtoparse[key][j] !== "number") {
-                                console.log("Config file parameter " + key + " must be an array of two floats, not an array of " + typeof configtoparse[key][j]);
-                                process.exit(1);
-                            }
-                        }
-                    }
-                    if (key === "embeddinginitrange") {
-                        if (!Array.isArray(configtoparse[key])) {
-                            console.log("Config file parameter " + key + " must be an array of two floats, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                        if (configtoparse[key].length !== 2) {
-                            console.log("Config file parameter " + key + " must be an array of two floats, not an array of " + configtoparse[key].length + " floats");
-                            process.exit(1);
-                        }
-                        for (var j = 0; j < configtoparse[key].length; j++) {
-                            if (typeof configtoparse[key][j] !== "number") {
-                                console.log("Config file parameter " + key + " must be an array of two floats, not an array of " + typeof configtoparse[key][j]);
-                                process.exit(1);
-                            }
-                        }
-                    }
-                    if (pretraining__) {
-                        if (key === "pre-train-epochs") {
-                            if (typeof configtoparse[key] !== "number" || Math.floor(configtoparse[key]) !== configtoparse[key]) {
-                                console.log("Config file parameter " + key + " must be an int, not a " + typeof configtoparse[key]);
-                                process.exit(1);
-                            }
-                        }
-                    }
-                    if (training__) {
-                        if (key === "train-epochs") {
-                            if (typeof configtoparse[key] !== "number" || Math.floor(configtoparse[key]) !== configtoparse[key]) {
-                                console.log("Config file parameter " + key + " must be an int, not a " + typeof configtoparse[key]);
-                                process.exit(1);
-                            }
-                        }
-                    }
-                    if (pretraining__) {
-                        if (key === "pre-train-optimizer") {
-                            if (typeof configtoparse[key] !== "string") {
-                                console.log("Config file parameter " + key + " must be a string, not a " + typeof configtoparse[key]);
-                                process.exit(1);
-                            }
-                        }
-                    }
-                    if (training__) {
-                        if (key === "train-optimizer") {
-                            if (typeof configtoparse[key] !== "string") {
-                                console.log("Config file parameter " + key + " must be a string, not a " + typeof configtoparse[key]);
-                                process.exit(1);
-                            }
-                        }
-                    }
-                    if (key === "antiOverfittingOptimisations") {
-                        if (typeof configtoparse[key] !== "boolean") {
-                            console.log("Config file parameter " + key + " must be a boolean, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                    }
-                    if (key === "microbatchSize") {
-                        if (typeof configtoparse[key] !== "number" || Math.floor(configtoparse[key]) !== configtoparse[key]) {
-                            console.log("Config file parameter " + key + " must be an int, not a " + typeof configtoparse[key]);
-                            process.exit(1);
-                        }
-                    }
-                    config[key] = configtoparse[key];
+                if (!fileExists(p)) {
+                    configError("pre-training-paths file does not exist: " + p);
                 }
             }
         }
+
+        // Only require training-dataset-path if --train flag is present
+        var needsTrain = args.indexOf("--train") !== -1;
+        if (needsTrain) {
+            if (!isString(configtoparse["training-dataset-path"])) {
+                configError("training-dataset-path must be a string.");
+            }
+            if (!fileExists(configtoparse["training-dataset-path"])) {
+                configError("training-dataset-path file does not exist: " + configtoparse["training-dataset-path"]);
+            }
+        }
+
+        var valid_optim = ["adam", "sgd_momentum", "sgd"];
+
+        // Only require train-epochs and train-optimizer if --train flag is present
+        if (needsTrain) {
+            if (!isInt(configtoparse["train-epochs"]) || configtoparse["train-epochs"] <= 0) {
+                configError("train-epochs must be an integer > 0.");
+            }
+            if (!isString(configtoparse["train-optimizer"]) || valid_optim.indexOf(configtoparse["train-optimizer"]) === -1) {
+                configError("train-optimizer must be one of: " + valid_optim.join(", "));
+            }
+        }
+
+        // Only require pre-train-epochs and pre-train-optimizer if --pretrain flag is present
+        if (needsPretrain) {
+            if (!isInt(configtoparse["pre-train-epochs"]) || configtoparse["pre-train-epochs"] <= 0) {
+                configError("pre-train-epochs must be an integer > 0.");
+            }
+            if (!isString(configtoparse["pre-train-optimizer"]) || valid_optim.indexOf(configtoparse["pre-train-optimizer"]) === -1) {
+                configError("pre-train-optimizer must be one of: " + valid_optim.join(", "));
+            }
+        }
+
+        if (!isInt(configtoparse["contextSize"]) || configtoparse["contextSize"] <= 0) {
+            configError("contextSize must be an integer > 0.");
+        }
+        if (!isInt(configtoparse["maxOutputSize"]) || configtoparse["maxOutputSize"] <= 0) {
+            configError("maxOutputSize must be an integer > 0.");
+        }
+        if (!isInt(configtoparse["microbatchSize"]) || configtoparse["microbatchSize"] <= 0) {
+            configError("microbatchSize must be an integer > 0.");
+        }
+
+        if (!isFloat(configtoparse["learningRate"]) || configtoparse["learningRate"] <= 0) {
+            configError("learningRate must be a float > 0.");
+        }
+
+        if (!isBool(configtoparse["antiOverfittingOptimisations"])) {
+            configError("antiOverfittingOptimisations must be a boolean.");
+        }
+
+        // For new model, check all architecture params
+        if (isNew) {
+            if (!isInt(configtoparse["embeddingSize"]) || configtoparse["embeddingSize"] <= 0) {
+                configError("embeddingSize must be an integer > 0.");
+            }
+            if (!isInt(configtoparse["layersAmount"]) || configtoparse["layersAmount"] <= 0) {
+                configError("layersAmount must be an integer > 0.");
+            }
+            if (!isInt(configtoparse["heads"]) || configtoparse["heads"] <= 0) {
+                configError("heads must be an integer > 0.");
+            }
+            if (!isArray(configtoparse["biasesinitrange"]) || configtoparse["biasesinitrange"].length !== 2 ||
+                !isFloat(configtoparse["biasesinitrange"][0]) || !isFloat(configtoparse["biasesinitrange"][1]) ||
+                configtoparse["biasesinitrange"][0] >= configtoparse["biasesinitrange"][1]) {
+                configError("biasesinitrange must be an array of two floats [min, max] with min < max.");
+            }
+            if (!isArray(configtoparse["embeddinginitrange"]) || configtoparse["embeddinginitrange"].length !== 2 ||
+                !isFloat(configtoparse["embeddinginitrange"][0]) || !isFloat(configtoparse["embeddinginitrange"][1]) ||
+                configtoparse["embeddinginitrange"][0] >= configtoparse["embeddinginitrange"][1]) {
+                configError("embeddinginitrange must be an array of two floats [min, max] with min < max.");
+            }
+        } else {
+            // For loaded model, these fields must NOT be present
+            var forbidden = ["embeddingSize", "layersAmount", "heads", "biasesinitrange", "embeddinginitrange"];
+            for (var j = 0; j < forbidden.length; j++) {
+                if (configtoparse.hasOwnProperty(forbidden[j])) {
+                    configError("Config for loaded model must not contain: " + forbidden[j]);
+                }
+            }
+        }
+    
         config = configtoparse;
         console.log("Config file loaded successfully.");
     }
@@ -3756,6 +3818,17 @@ var resolveDependency = async function(dependency){
             }
         } else {
             var transformer = await new Transformer(false, null, model_location);
+            if (config__){
+                transformer.contextSize = config["contextSize"];
+                transformer.learningRate = config["learningRate"];
+                transformer.maxOutputSize = config["maxOutputSize"];
+            }
+            if (pretraining__) {
+                await transformer.pretrain(config["pre-training-paths"], config["pre-train-epochs"], config["pre-train-optimizer"]);
+            }
+            if (training__) {
+                await transformer.train(config["training-dataset-path"], config["train-epochs"], config["train-optimizer"]);
+            }
         };
         // Final interactive generation loop
         try {

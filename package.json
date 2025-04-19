@@ -1,9 +1,41 @@
 {
+  "name": "cleanai",
+  "version": "1.0.0",
+  "description": "A fully standalone, terminal-based AI model CLI for training and inference",
+  "main": "cleanai.js",
+  "bin": {
+    "cleanai": "./cleanai.js"
+  },
+  "author": "William (willmil11)",
+  "license": "MIT",
   "dependencies": {
     "archiver": "^7.0.1",
     "readline-sync": "^1.4.10",
     "tiktoken": "^1.0.20",
     "uuid": "^11.1.0",
     "yauzl": "^3.2.0"
-  }
+  },
+  "keywords": [
+    "AI",
+    "machine-learning",
+    "transformer",
+    "language-model",
+    "model-training",
+    "pretraining",
+    "fine-tuning",
+    "CLI",
+    "command-line",
+    "terminal",
+    "inference",
+    "LLM",
+    "neural-network",
+    "vanilla-js",
+    "pure-javascript",
+    "no-ml-dependencies",
+    "zip-archive",
+    "custom-weights",
+    "open-source",
+    "lightweight",
+    "cleanai"
+  ]
 }
