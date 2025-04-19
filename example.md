@@ -134,4 +134,4 @@ cleanai --load /path/to/model.zip --config config.json --train
 And you're back in it.
 
 ## I went to do further things with pre-training etc.
-Well then you've got some reading to do, go back to <a href="./guide.md">the guide</a>.
+Well then you've got some reading to do, go back to <a href="https://github.com/willmil11/cleanai/blob/main/guide.md">the guide</a>.

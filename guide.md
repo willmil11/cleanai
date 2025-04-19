@@ -25,7 +25,7 @@ cleanai
 ```
 And a polished help messsage will present itself to you, it may look distorted an unreadable if your screen or terminal window is not wide enough tho, that is why I left a screenshot below of how it is supposed to look like:
 <br><br>
-<img src="./docimgs/help_message.png" style="border: 2px solid white; border-radius: 5px">
+<img src="https://github.com/willmil11/cleanai/blob/main/docimgs/help_message.png?raw=true" style="border: 2px solid white; border-radius: 5px">
 
 ## Config
 The config is a json file as you the help message from the cli suggested, It's structure is slightly different for a new model and a loaded model but the comments should explain that (a config is not required for a loaded model if you're not pre-training or training it further as the help message from the cli suggests).
@@ -149,7 +149,7 @@ Interactive mode will trigger every time a new epoch is completed and will expir
 After all the epochs have been completed or you /stop the training while in interactive mode, you will land in the final console which is basically interactive mode without the in-training features. There you can execute /help for a list of commands as usual.
 
 ## Are you still lost perhaps? Looking for a practical example?
-Well search no more, here: <a href="./example.md">example</a>.
+Well search no more, here: <a href="https://github.com/willmil11/cleanai/blob/main/example.md">example</a>.
 
 ## What each file does
 - cleanai.js: Code of the ai.
@@ -158,4 +158,4 @@ Well search no more, here: <a href="./example.md">example</a>.
 - README.md: Main readme, what you land on when you go on the repo on github.
 - vocabulary.json: Tiktoken gpt4 vocabulary but cleaned of tokens I didn't like.
 - LICENSE: MIT license.
-- deprecated directory: Refer to <a href="./deprecated/deprecated.md">deprecated readme</a>
+- deprecated directory: Refer to <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/deprecated.md">deprecated readme</a>

@@ -3,7 +3,7 @@
 This is a project of mine that as of 19.04.2025 I've been working on for about 4 months. This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization, readline-sync for the interactive console mode, uuid for random string generation and zip librairies (archiver and yauzl) to load/save models. Only pure raw javascript and no abstractions.
 
 ## How do I use it
-Look at the guide: <a href="./guide.md">guide</a>
+Look at the guide: <a href="https://github.com/willmil11/cleanai/blob/main/guide.md">guide</a>
 
 ## Can I use this to train my AI?
 Absolutely, however you won't get the same kind of speeds as you would get with pytorch or tensorflow, see this is pure single threaded javascript running on CPU (for now). But it will absolutely train the model correctly and run it correctly.
@@ -35,7 +35,7 @@ I'm William, a 14 yo french programmer and this is my most ambitious project yet
 If you're on the npm page, check out and perhaps star the <a href="https://github.com/willmil11/cleanai">repo</a>
 
 ## Deprecated versions
-Refer to the <a href="./deprecated/deprecated.md">deprecated readme</a>
+Refer to the <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/deprecated.md">deprecated readme</a>
 
 ## License
 The license for this code is the <a href="./LICENSE">MIT License</a>.
