@@ -37,5 +37,9 @@ If you're on the npm page, check out and perhaps star the <a href="https://githu
 ## Deprecated versions
 Refer to the <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/deprecated.md">deprecated readme</a>
 
+## Version history
+- 1.0.1 -- Readme fixes.
+- 1.0.0 -- Original release.
+
 ## License
-The license for this code is the <a href="./LICENSE">MIT License</a>.
+The license for this code is the <a href="https://github.com/willmil11/cleanai/blob/main/LICENSE">MIT License</a>.
