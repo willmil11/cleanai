@@ -42,3 +42,6 @@ So sometimes numbers get too big, and we're at risk of them being so big that py
 
 ## Who am I and what does this project mean to me?
 I'm William, a 14 yo french programmer and this is my most ambitious project yet. It took an insane amount of planning, coding and debugging but it was sooo worth it.
+
+# License
+The license for this code is the <a href="./LICENSE">MIT License</a>.
