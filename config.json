@@ -1,6 +1,6 @@
 {
     "pre-training-paths": [
-        "wiki_000000.txt"
+        "/mnt/storage/wikipedia/wiki_000000.txt"
     ],
     "training-dataset-path": "dataset.json",
     "pre-train-epochs": 1000,
@@ -9,11 +9,11 @@
     "train-optimizer": "adam",
     "contextSize": 128,
     "embeddingSize": 128,
-    "learningRate": 0.0005,
+    "learningRate": 0.001,
     "maxOutputSize": 16,
     "layersAmount": 4,
     "heads": 4,
-    "microbatchSize": 2,
+    "microbatchSize": 24,
     "biasesinitrange": [-0.01, 0.01],
     "embeddinginitrange": [-0.1, 0.1],
     "antiOverfittingOptimisations": true

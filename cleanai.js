@@ -26,6 +26,7 @@ var readline = require("readline");
 var { Tiktoken } = require("tiktoken/lite");
 var cl100k_base = require("tiktoken/encoders/cl100k_base.json");
 var uuid = require("uuid");
+var readlineSync = require("readline-sync");
 
 var args = process.argv.slice(2);
 
@@ -1296,8 +1297,8 @@ class Transformer {
         }
     
         // Apply updates to embeddings that were used
-        const AGC_LAMBDA_EMBED = 0.005; // Using a distinct constant name just in case
-        const EPS_EMBED = 1e-6;
+        var AGC_LAMBDA_EMBED = 0.005; // Using a distinct constant name just in case
+        var EPS_EMBED = 1e-6;
         // Need l2normFloat32 helper here for pNorm calculation
         function l2normFloat32Embed(arr) { // Renamed slightly to avoid potential scope issues if defined elsewhere
             let s = 0;
@@ -1317,7 +1318,7 @@ class Transformer {
                 var raw_grad_vector = aggregated_embedding_grads[vocab_idx]; // Float32Array [g, g, g...]
     
                 // --- In-loop AGC Calculation for Embeddings ---
-                const pNorm = Math.max(l2normFloat32Embed(param), EPS_EMBED);
+                var pNorm = Math.max(l2normFloat32Embed(param), EPS_EMBED);
     
                 let gNormSq = 0;
                 for (let i = 0; i < raw_grad_vector.length; i++) {
@@ -1325,9 +1326,9 @@ class Transformer {
                      if (!isFinite(grad_val)) grad_val = 0; // Treat NaN/Inf gradient as 0 for norm calculation
                      gNormSq += grad_val * grad_val;
                 }
-                const gNorm = Math.sqrt(gNormSq);
+                var gNorm = Math.sqrt(gNormSq);
     
-                const maxGrad = AGC_LAMBDA_EMBED * pNorm;
+                var maxGrad = AGC_LAMBDA_EMBED * pNorm;
                 let scale = 1.0;
                 if (gNorm > maxGrad) {
                     // Prevent division by zero or near-zero gNorm, though unlikely if gNorm > maxGrad > 0
@@ -1453,10 +1454,6 @@ class Transformer {
             console.log(`Heap used before GC: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`);
             global.gc();
             console.log(`Heap used after GC: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`);
-            setImmediate(() => {
-                global.gc();
-                console.log(`Heap used after GC (post setImmediate): ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`);
-            });
         } else {
             console.warn("GC not exposed! Run with: node --expose-gc app.js");
         }
@@ -1465,8 +1462,8 @@ class Transformer {
     // Helper method to update parameters stored in a single Float32Array
     updateParamFloat32Array(param_array, grad_array, optimizer, lr, weight_decay, momentum_factor) {
         // --- Adaptive Gradient Clipping (per Brock et al. 2021) ---
-        const AGC_LAMBDA = 0.005;       // aggression knob (try 0.01, 0.005, 0.001)
-        const EPS        = 1e-6;
+        var AGC_LAMBDA = 0.005;       // aggression knob (try 0.01, 0.005, 0.001)
+        var EPS        = 1e-6;
 
         function l2normFloat32(arr) {    // only use value slots (i, i+3, …)
             let s = 0;
@@ -1474,11 +1471,11 @@ class Transformer {
             return Math.sqrt(s);
         }
         function agc(paramArr, gradArr) {
-            const pNorm = Math.max(l2normFloat32(paramArr), EPS);
-            const gNorm = l2normFloat32(gradArr);
-            const maxGrad = AGC_LAMBDA * pNorm;
+            var pNorm = Math.max(l2normFloat32(paramArr), EPS);
+            var gNorm = l2normFloat32(gradArr);
+            var maxGrad = AGC_LAMBDA * pNorm;
             if (gNorm > maxGrad) {
-                const scale = maxGrad / (gNorm + 1e-12);
+                var scale = maxGrad / (gNorm + 1e-12);
                 for (let i = 0; i < gradArr.length; i += 3) gradArr[i] *= scale;   // scale only the ‘value’ slot
             }
         }
@@ -2278,7 +2275,7 @@ class Transformer {
              }
         }
     }
-    train(dataset, epochs, optimizer) {
+    async train(dataset, epochs, optimizer) {
         if (epochs === undefined) { epochs = 1; }
         if (optimizer === undefined) { optimizer = "sgd"; }
         var subtimer = timer_();
@@ -2528,7 +2525,7 @@ class Transformer {
                 }
                 var should_prompt = !is_best_loss;
                 if (is_best_loss || should_prompt) {
-                    var result = this.interactive_test_loop(epoch, avg_epoch_loss, optimizer);
+                    var result = await this.interactive_test_loop(epoch, avg_epoch_loss, optimizer, loss_history, best_loss)
                     if (result === "STOP_TRAINING") {
                         break;
                     } else {
@@ -2556,7 +2553,7 @@ class Transformer {
         ndprint("Time elapsed: " + timer_end(sgtimer) + " ms");
         return best_loss;
     }
-    pretrain(text_files, epochs, optimizer) {
+    async pretrain(text_files, epochs, optimizer) {
         if (epochs === undefined) { epochs = 1; }
         if (optimizer === undefined) { optimizer = "sgd"; }
         ndprint("\n" + "=".repeat(40) + "\nStarting pretraining with " + optimizer + " optimizer\n" + "=".repeat(40) + "\n");
@@ -2755,7 +2752,7 @@ class Transformer {
                     ndprint(`Epoch ${epoch + 1}: No training steps counted.`);
             }
             ndprint("-".repeat(60)); // Optional separator
-            var result = this.interactive_test_loop(epoch, epoch_losses.length ? avg_loss : 0.0, optimizer);
+            var result = await this.interactive_test_loop(epoch, epoch_losses.length ? avg_loss : 0.0, optimizer, loss_history, best_loss);
             if (result === "STOP_TRAINING") {
                 break;
             } else {
@@ -3264,7 +3261,7 @@ class Transformer {
         }
         return output;
     }
-    async interactive_test_loop(epoch_num, avg_loss, optimizer) {
+    async interactive_test_loop(epoch_num, avg_loss, optimizer, loss_history, best_loss) {
         ndprint("\n[🧪 Interactive Test Mode]");
 
         try {
@@ -3280,26 +3277,29 @@ class Transformer {
             return optimizer;
         }
 
+        ndprint("Available commands:");
+        ndprint("  /continue        Continue training");
+        ndprint("  /stop            Stop training");
+        ndprint("  /save [path]     Save model (optional path)");
+        ndprint("  /switch_to_*     Switch optimizer (sgd, adam, sgd_momentum)");
+        ndprint("  /temperature X   Set or view temperature");
+        ndprint("  /info            Show current training info");
+        ndprint("  /help            Show this help message");
+        ndprint("")
+
         // If the user responded before the 30s timeout, we enter the loop:
         while (true) {
             var user_input;
             try {
                 // Prompt again for the actual commands, also with a 30s limit
-                user_input = await inputWithTimeout("› ", 30000);
-                // If the user timed out here, skip interactive mode
-                if (user_input === null) {
-                    ndprint("\n[Info] Timeout. Skipping interactive testing...");
-                    break;
-                }
-                user_input = user_input.trim();
+                user_input = readlineSync.question("› ").trim();
             } catch (e) {
                 ndprint("\n[Info] Skipping interactive testing...");
                 break;
             }
 
             if (user_input === "") {
-                ndprint("[Info] Skipping...");
-                break;
+                continue
             } else if (user_input === "/continue") {
                 ndprint("[Info] Continuing to next epoch...");
                 break;
@@ -3337,10 +3337,25 @@ class Transformer {
                     }
                 }
             } else if (user_input === "/info") {
-                ndprint("[Info] Epoch: " + (epoch_num + 1) +
-                        ", Loss: " + avg_loss.toFixed(4) +
-                        ", Optimizer: " + optimizer +
-                        ", Temperature: " + this.temperature);
+                ndprint("--- Training Info ---");
+                 ndprint(`  Epoch: ${epoch_num + 1}`);
+                 ndprint(`  Optimizer: ${optimizer}`);
+                 ndprint(`  Current Epoch Loss: ${!isNaN(avg_loss) ? avg_loss.toFixed(6) : 'N/A'}`);
+                 ndprint(`  Best Loss So Far: ${isFinite(best_loss) ? best_loss.toFixed(6) : 'Infinity'}`);
+                 ndprint(`  Previous epoch loss: ${(loss_history.length > 1) ? loss_history[loss_history.length - 2].toFixed(6) : 'N/A'}`);
+
+                 // Calculate average of last 10 (or fewer if history is short)
+                 var history_len = loss_history.length;
+                 var window_size = Math.min(history_len, 10);
+                 if (window_size > 0) {
+                     var recent_losses = loss_history.slice(-window_size);
+                     var avg_recent = recent_losses.reduce((a, b) => a + b, 0) / window_size;
+                     ndprint(`  Avg Loss (Last ${window_size} epochs): ${avg_recent.toFixed(6)}`);
+                 } else {
+                     ndprint(`  Avg Loss (Last 10 epochs): N/A (history too short)`);
+                 }
+                 ndprint(`  Current Temperature: ${this.temperature}`);
+                 ndprint("---------------------");
             } else if (user_input === "/help") {
                 ndprint("Available commands:");
                 ndprint("  /continue        Continue training");
@@ -3362,82 +3377,83 @@ class Transformer {
         }
         return optimizer;
     }
-} // <-- End of Transformer class definition
+}; // <-- End of Transformer class definition
 
-// Main execution logic starts here
-if (flag) {
-    var transformer = new Transformer(true, {
-        "contextSize": config["contextSize"],
-        "embeddingSize": config["embeddingSize"],
-        "learningRate": config["learningRate"],
-        "maxOutputSize": config["maxOutputSize"],
-        "layersAmount": config["layersAmount"],
-        "heads": config["heads"],
-        "use_he_init": true,
-        "biasesinitrange": config["biasesinitrange"],
-        "embeddinginitrange": config["embeddinginitrange"]
-    });
-    if (pretraining__) {
-        transformer.pretrain(config["pre-training-paths"], config["pre-train-epochs"], config["pre-train-optimizer"]);
-    }
-    if (training__) {
-        transformer.train(config["training-dataset-path"], config["train-epochs"], config["train-optimizer"]);
-    }
-} else {
-    var transformer = new Transformer(false, null, model_location);
-}
-
-// Final interactive generation loop
-try {
-    ndprint("\nEntering interactive mode. Type a message or command:");
-    ndprint("Commands: /save [path], /temperature [value], /help, /exit");
-    function generate_response(text) {
-        var formatted_input = "user:\n" + text + "\nyou:\n";
-        // No need to tokenize here, generate handles it
-        return transformer.generate(formatted_input, transformer.temperature);
-    }
-    while (true) {
-        var text = require("readline-sync").question("› ").trim();
-        if (text.indexOf("/save ") === 0) {
-            var path_out = text.substring(6);
-            transformer.save(path_out);
-            ndprint("Model saved to " + path_out);
-            continue;
-        } else if (text === "/save") {
-            transformer.save();
-            ndprint("Model saved to model.json");
-            continue;
-        } else if (text.indexOf("/temperature") === 0) {
-            var parts = text.split(" ", 2);
-            if (parts.length === 1) {
-                ndprint("Current temperature: " + transformer.temperature);
-            } else {
-                try {
-                    transformer.temperature = parseFloat(parts[1]);
-                    ndprint("Set temperature to " + transformer.temperature);
-                } catch (e) {
-                    ndprint("Invalid temperature value.");
-                }
-            }
-            continue;
-        } else if (text === "/help") {
-             // Interactive mode help
-            ndprint("Available commands:");
-            ndprint("  /save [path]     Save model to file");
-            ndprint("  /temperature X   Set or view temperature");
-            ndprint("  /exit            Exit interactive mode");
-            ndprint("  /help            Show this help message");
-            continue;
-        } else if (text === "/exit") {
-            console.log("Exiting interactive mode.");
-            break;
+(async function(){
+    // Main execution logic starts here
+    if (flag) {
+        var transformer = new Transformer(true, {
+            "contextSize": config["contextSize"],
+            "embeddingSize": config["embeddingSize"],
+            "learningRate": config["learningRate"],
+            "maxOutputSize": config["maxOutputSize"],
+            "layersAmount": config["layersAmount"],
+            "heads": config["heads"],
+            "use_he_init": true,
+            "biasesinitrange": config["biasesinitrange"],
+            "embeddinginitrange": config["embeddinginitrange"]
+        });
+        if (pretraining__) {
+            await transformer.pretrain(config["pre-training-paths"], config["pre-train-epochs"], config["pre-train-optimizer"]);
         }
-        // If it's not a command, generate a response
-        var output = generate_response(text);
-        ndprint(output);
-    } // End of while loop
-} // Close the try block
-catch (e) {
-    ndprint("\nExiting interactive mode due to error: " + e); // Add error message
-    process.exit(1); // Exit with an error code
-}
+        if (training__) {
+            await transformer.train(config["training-dataset-path"], config["train-epochs"], config["train-optimizer"]);
+        }
+    } else {
+        var transformer = new Transformer(false, null, model_location);
+    };
+    // Final interactive generation loop
+    try {
+        ndprint("\nEntering interactive mode. Type a message or command:");
+        ndprint("Commands: /save [path], /temperature [value], /help, /exit");
+        function generate_response(text) {
+            var formatted_input = "user:\n" + text + "\nyou:\n";
+            // No need to tokenize here, generate handles it
+            return transformer.generate(formatted_input, transformer.temperature);
+        }
+        while (true) {
+            var text = require("readline-sync").question("› ").trim();
+            if (text.indexOf("/save ") === 0) {
+                var path_out = text.substring(6);
+                transformer.save(path_out);
+                ndprint("Model saved to " + path_out);
+                continue;
+            } else if (text === "/save") {
+                transformer.save();
+                ndprint("Model saved to model.json");
+                continue;
+            } else if (text.indexOf("/temperature") === 0) {
+                var parts = text.split(" ", 2);
+                if (parts.length === 1) {
+                    ndprint("Current temperature: " + transformer.temperature);
+                } else {
+                    try {
+                        transformer.temperature = parseFloat(parts[1]);
+                        ndprint("Set temperature to " + transformer.temperature);
+                    } catch (e) {
+                        ndprint("Invalid temperature value.");
+                    }
+                }
+                continue;
+            } else if (text === "/help") {
+                // Interactive mode help
+                ndprint("Available commands:");
+                ndprint("  /save [path]     Save model to file");
+                ndprint("  /temperature X   Set or view temperature");
+                ndprint("  /exit            Exit interactive mode");
+                ndprint("  /help            Show this help message");
+                continue;
+            } else if (text === "/exit") {
+                console.log("Exiting interactive mode.");
+                break;
+            }
+            // If it's not a command, generate a response
+            var output = generate_response(text);
+            ndprint(output);
+        } // End of while loop
+    } // Close the try block
+    catch (e) {
+        ndprint("\nExiting interactive mode due to error: " + e); // Add error message
+        process.exit(1); // Exit with an error code
+    }
+})();
