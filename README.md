@@ -1,6 +1,6 @@
 # Cleanai
 ## What is this?
-This is a project of mine that as of 18.04.2025 I've been working on for about 4 months. This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization and readline for the interactive console mode as you can see in package.json. Only pure raw javascript and no abstractions. You can see the <a href="./quickstart.md">quickstart</a>
+This is a project of mine that as of 18.04.2025 I've been working on for about 4 months. This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization, readline-sync for the interactive console mode, uuid for random string generation and zip librairies (archiver and yauzl) to load/save models. Only pure raw javascript and no abstractions. You can see the <a href="./quickstart.md">quickstart</a>
 
 ## Why?
 I wanted to see how this actually works therfore I decided to put Claude, Chatgpt and Gemini to work to teach me how all of this works, I also used them to implement some parts of the code like training, pre-training and other stuff but I generally understand how it works now. Because this works and this is really cool I am releasing it on github publicly :)

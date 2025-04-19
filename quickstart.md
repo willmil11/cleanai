@@ -1,6 +1,7 @@
 # Quickstart
 ## To use the code out of the box
 - Open a terminal
+- Run ```npm install``` (optional because of dependency auto-install)
 - Run ```node --max-old-space-size=however much memory you wanna allocate in mb to the ai --expose-gc cleanai.js --new --config config.json --train```
 
 ## To do some actual serious training
