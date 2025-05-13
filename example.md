@@ -70,7 +70,7 @@ After you've done this create a simple config.json file with the following conte
     "maxOutputSize": 16,
     "layersAmount": 4,
     "heads": 4,
-    "microbatchSize": 24,
+    "batchSize": 24,
     "biasesinitrange": [-0.01, 0.01],
     "embeddinginitrange": [-0.1, 0.1],
     "antiOverfittingOptimisations": true //if your model is not learning well, try setting this to false (this applies only to very small datasets without pre-training that we wanna learn perfectly)
@@ -122,7 +122,7 @@ This will result in this if you don't do any tweaks from the original example co
     "contextSize": 128,
     "learningRate": 0.0001,
     "maxOutputSize": 16,
-    "microbatchSize": 24,
+    "batchSize": 24,
     "antiOverfittingOptimisations": true //if your model is not learning well, try setting this to false (this applies only to very small datasets without pre-training that we wanna learn perfectly)
 }
 ```

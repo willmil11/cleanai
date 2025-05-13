@@ -10,6 +10,11 @@
     "contextSize": 128,
     "learningRate": 0.0001,
     "maxOutputSize": 16,
-    "microbatchSize": 24,
-    "antiOverfittingOptimisations": true
+    "batchSize": 7,
+    "antiOverfittingOptimisations": true,
+    "embeddingSize": 128,
+    "layersAmount": 4,
+    "heads": 3,
+    "biasesinitrange": [-0.01, 0.01],
+    "embeddinginitrange": [-0.01, 0.01]
 }
