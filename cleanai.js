@@ -32,6 +32,9 @@ var submode = "Turtle" //Could also be "Rabbit"
 //Turtle mode means the worker is given all data on spawn, so less overhead but way longer spawn (initialisation) time.
 //Neither mode uses more or less memory. (or the difference is negligible, a few kilobytes at most)
 
+//Do not change mode or submode (recommended is SharedMemory/Turtle)
+//All modes and submodes should work natively however.
+
 var workerPids = [];
 var timers = [];
 
@@ -108,7 +111,9 @@ var desiredMemFlag = '--max-old-space-size=9999999999999';
 if (!hasExposeGC || !hasMemoryLimit) {
     var newArgs = [
         !hasMemoryLimit ? desiredMemFlag : null,
-        !hasExposeGC ? '--expose-gc' : null
+        !hasExposeGC ? '--expose-gc' : null,
+        "--no-opt",
+        "--interpreted-frames-native-stack"
     ]
     .concat(process.execArgv)
     .concat([process.argv[1]])
@@ -846,8 +851,8 @@ var resolveDependency = async function(dependency){
         console.log("Config file loaded successfully.");
     }
 
-    var ndprint = function(text) {
-        console.log(text);
+    var ndprint = function(...args) {
+        console.log(...args);
     };  
 
     var print = function() {
@@ -1120,7 +1125,7 @@ var resolveDependency = async function(dependency){
                 ndprint("Initialized layers in", timer_end(gtimer), "ms");
 
                 ndprint("Initializing embeddings...");
-                timer = timer_();
+                var timer = timer_();
                 this.transformer["embeddings"] = Array.from({ length: this.vocab.length }, () => sharedFloat32Array(this.embeddingSize * 3).fill(0));
                 params_done = 0;
                 total_params_layer = this.vocab.length * this.embeddingSize;
@@ -3745,7 +3750,7 @@ var resolveDependency = async function(dependency){
 
                     var gtimer = timer_();
                     for (var index = 0; index < config.batchSize; index++){
-                        console.log("Spawning worker " + index);
+                        console.log("Spawning worker " + (index + 1));
                         var timer = timer_();
                         
                         var generateWorkerId = function(){
@@ -3799,7 +3804,12 @@ var resolveDependency = async function(dependency){
                                     },
                                     "submode": submode
                                 }
-                            });
+                            }, {"execArgv": [
+                                "--expose-gc",
+                                "--max-old-space-size=9999999999999",
+                                "--no-opt",
+                                "--interpreted-frames-native-stack"
+                            ]});
                         }
                         else{
                             if (submode === "Rabbit"){
@@ -3822,7 +3832,12 @@ var resolveDependency = async function(dependency){
                                         },
                                         "submode": submode
                                     }
-                                });
+                                }, {"execArgv": [
+                                    "--expose-gc",
+                                    "--max-old-space-size=9999999999999",
+                                    "--no-opt",
+                                    "--interpreted-frames-native-stack"
+                                ]})
                             }
                             else{
                                 console.error("Submode is invalid. Should be either Rabbit or Turtle.")
@@ -3838,7 +3853,7 @@ var resolveDependency = async function(dependency){
                             "workerId": workerId,
                             "worker": worker
                         })
-                        console.log("Worker " + index + " spawned in " + timer_end(timer) + " ms");
+                        console.log("Worker " + (index + 1) + " spawned in " + timer_end(timer) + " ms");
                     }
                     console.log("All workers spawned in " + timer_end(gtimer) + " ms");
                 }
@@ -3922,6 +3937,259 @@ var resolveDependency = async function(dependency){
                 optimizer = "sgd";
             }
             ndprint("\n" + "=".repeat(40) + "\nStarting training with " + optimizer + " optimizer\n" + "=".repeat(40) + "\n");
+            
+            if (mode === "SharedMemory"){
+                this.alreadyKilledWorkers = false;
+
+                this.killWorkers = function(error) {
+                    if (this.alreadyKilledWorkers){
+                        return;
+                    }
+                    this.alreadyKilledWorkers = true;
+                    if (error){
+                        console.error("[Exit] Uncaught exception:", error);
+                    }
+                    console.log("[Exit] Killing workers...");
+                    for (var index = 0; index < this.workerthings.length; index++){
+                        console.log("[Exit] Killing worker " + (index + 1));
+                        this.workerthings[index].worker.terminate();
+                        console.log("[Exit] Killed worker " + (index + 1));
+                    }
+                    console.log("[Exit] Killed workers.");
+                    console.log("[Exit] Exiting...");
+                    
+                    if (error){
+                        process.exit(1)
+                    }
+                    else{
+                        process.exit(0)
+                    }
+                }.bind(this)
+
+                process.on('exit', this.killWorkers.bind(this));
+                process.on('SIGINT', this.killWorkers.bind(this));
+                process.on('SIGUSR1', this.killWorkers.bind(this));
+                process.on('SIGUSR2', this.killWorkers.bind(this));
+                process.on('uncaughtException', function(err) { this.killWorkers(err); }.bind(this));
+
+                this.workerGradients = []; // Initialize workerGradients for SharedMemory mode
+
+                var workers_tasklists = []
+                var responses = []
+
+                for (var inde = 0; inde < this.workerthings.length; inde++){
+                    ;(function(index){ // Removed async from IIFE
+                        workers_tasklists.push({
+                            "workerId": this.workerthings[index].workerId,
+                            "tasklist": []
+                        });
+                        const transformerInstance = this; // Capture Transformer's `this`
+                        this.workerthings[index].worker.on("message", async function(message){ // Keep inner handler async
+                            if (message.type === "train_step_feedback_res"){
+                                for (var r = 0; r < responses.length; r++) {
+                                    if (responses[r].reqId === message.requestId) {
+                                        responses[r].response = message.returns; // `responses` is from outer scope
+                                        break;
+                                    }
+                                }
+                            }
+                            else{
+                                if (message.type === "train_step_feedback"){
+                                    this.workerGradients.push(message.gradients)
+                                    transformerInstance.workerthings[index].worker.postMessage({ // Use captured `this`
+                                        "type": "train_step_feedback_res",
+                                        "requestId": message.requestId,
+                                        "response": true
+                                    });
+                                }
+                                else{
+                                    if (message.type === "req_data"){
+                                        var walk = function(root, path) { // Define walk locally or ensure it's accessible
+                                            // Handle edge cases
+                                            if (typeof path !== "string" || path.trim() === "") {
+                                            return root;
+                                            }
+                                        
+                                            // Match parts like ["key"] or [0]
+                                            var matcher = /\[(?:'([^']+)'|"([^"]+)"|([0-9]+))\]/g;
+                                            var match;
+                                            var current = root;
+                                        
+                                            while ((match = matcher.exec(path)) !== null) {
+                                            // Get whichever capture group matched
+                                            var key = match[1] !== undefined
+                                                ? match[1]
+                                                : match[2] !== undefined
+                                                ? match[2]
+                                                : match[3] !== undefined
+                                                ? parseInt(match[3], 10)
+                                                : undefined;
+                                        
+                                            // Early-out if the key is missing
+                                            if (current == null || !(key in current)) {
+                                                return undefined;
+                                            }
+                                        
+                                            current = current[key];
+                                            }
+                                        
+                                            return current;
+                                        };
+
+                                        transformerInstance.workerthings[index].worker.postMessage({ // Use captured `this`
+                                            "type": "req_data_res",
+                                            "requestId": message.requestId,
+                                            "response": walk(transformerInstance, message.pathto) // Use captured `this`
+                                        });
+                                    }
+                                    else{
+                                        if (message.type === "console_log"){
+                                            console.log(message.text);
+                                        }
+                                        else{
+                                            if (message.type === "console_error"){
+                                                console.error(message.text);
+                                            }
+                                            else{
+                                                if (message.type === "console_warn"){
+                                                    console.warn(message.text);
+                                                }
+                                                else{
+                                                    if (message.type === "console_debug"){
+                                                        console.debug(message.text);
+                                                    }
+                                                    else{
+                                                        if (message.type === "console_info"){
+                                                            console.info(message.text);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }.bind(transformerInstance)); // Bind message handler's `this`
+                        this.workerthings[index].worker.on("exit", function(){
+                            console.log("Worker " + index + " has exited with code " + this.exitCode + ".");
+                        }.bind(transformerInstance));
+                        this.workerthings[index].worker.on("error", function(error){
+                            console.log("Worker " + index + " has errored with error " + error + ".");
+                        }.bind(transformerInstance));
+                    }.bind(this))(inde); // Bind IIFE's `this`
+                }
+
+                // In cleanai.js, Transformer.prototype.train (SharedMemory mode)
+                var worker_train_step = async function(input, target) {
+                    var chosenWorkerEntry = null;
+                    var minTasks = Infinity;
+
+                    if (!workers_tasklists || workers_tasklists.length === 0) {
+                        console.error("FATAL: workers_tasklists is empty or undefined.");
+                        throw new Error("No workers available in task list.");
+                    }
+
+                    for (var w_idx = 0; w_idx < workers_tasklists.length; w_idx++) {
+                        if (workers_tasklists[w_idx].tasklist.length < minTasks) {
+                            minTasks = workers_tasklists[w_idx].tasklist.length;
+                            chosenWorkerEntry = workers_tasklists[w_idx];
+                        }
+                    }
+                    
+                    if (!chosenWorkerEntry) {
+                        // Fallback if all have minTasks (e.g. all 0), pick the first one.
+                        // This path should ideally not be hit if lists are populated.
+                        chosenWorkerEntry = workers_tasklists[0]; 
+                        console.warn("Fallback worker selection in worker_train_step, picking first worker.");
+                    }
+
+                    var workerItemForSubStep = null;
+                    for (var k_idx = 0; k_idx < this.workerthings.length; k_idx++) {
+                        if (this.workerthings[k_idx].workerId === chosenWorkerEntry.workerId) {
+                            workerItemForSubStep = this.workerthings[k_idx];
+                            break;
+                        }
+                    }
+
+                    if (!workerItemForSubStep) {
+                        console.error("FATAL: Could not find a worker object for chosenWorkerEntry ID:", chosenWorkerEntry.workerId);
+                        throw new Error("Worker object lookup failed in worker_train_step");
+                    }
+
+                    // Add a dummy task item to the chosen worker's tasklist
+                    const taskToken = {}; // Unique token for this task
+                    chosenWorkerEntry.tasklist.push(taskToken);
+
+                    try {
+                        return await sub_worker_train_step(input, target, workerItemForSubStep);
+                    } finally {
+                        // Remove the taskToken from the tasklist
+                        const taskIndex = chosenWorkerEntry.tasklist.indexOf(taskToken);
+                        if (taskIndex > -1) {
+                            chosenWorkerEntry.tasklist.splice(taskIndex, 1);
+                        }
+                    }
+                }.bind(this);
+
+                var requestIds = []
+
+                var genReqId = function(){ // This function is used by sub_worker_train_step
+                    while (true){
+                        var id = "";
+                        for (var index = 0; index < 5; index++){ // 5 digits: 100,000 combinations
+                            id += randomRangeInclusive([0, 9]);
+                        }
+                
+                        var found_in_active_responses = false;
+                        // 'responses' here refers to the `responses` array at line 2251,
+                        // which is used by sub_worker_train_step.
+                        for (var i = 0; i < responses.length; i++){ 
+                            if (responses[i].reqId == id){
+                                found_in_active_responses = true;
+                                break;
+                            }
+                        }
+                
+                        if (!found_in_active_responses){
+                            // No need to push to a global requestIds list.
+                            // The ID is unique among currently active requests tracked in `responses`.
+                            return id;
+                        }
+                        // If found in active responses, loop again.
+                    }
+                };
+
+                var sub_worker_train_step = async function(input, target, workerItem){
+                    var worker = workerItem.worker;
+                    var requestId = genReqId();
+                    worker.postMessage({
+                        "type": "train_step",
+                        "requestId": requestId,
+                        "data": {
+                            "input": input,
+                            "target": target
+                        }
+                    })
+                    responses.push({
+                        "reqId": requestId,
+                        "response": null // `responses` is from outer scope
+                    })
+                    
+                    while (true){
+                        for (var r = 0; r < responses.length; r++) {
+                            if (responses[r].reqId === requestId){
+                                if (responses[r].response !== null){
+                                    var loss_val = responses[r].response; // Get the loss
+                                    responses.splice(r, 1); // <<< MINIMAL FIX 1: Remove completed request
+                                    return loss_val; 
+                                }
+                            }
+                        }
+                        await wait(1);
+                    }
+                }.bind(this)
+            }
+            
             var sgtimer = timer_();
             var best_loss = Infinity;
             var epoch_losses = [];
@@ -4182,256 +4450,6 @@ var resolveDependency = async function(dependency){
                         break;
                     }
 
-                    this.alreadyKilledWorkers = false;
-
-                    this.killWorkers = function(error) {
-                        if (this.alreadyKilledWorkers){
-                            return;
-                        }
-                        this.alreadyKilledWorkers = true;
-                        if (error){
-                            console.error("[Exit] Uncaught exception:", error);
-                        }
-                        console.log("[Exit] Killing workers...");
-                        for (var index = 0; index < this.workerthings.length; index++){
-                            console.log("[Exit] Killing worker " + index);
-                            this.workerthings[index].worker.terminate();
-                            console.log("[Exit] Killed worker " + index);
-                        }
-                        console.log("[Exit] Killed workers.");
-                        console.log("[Exit] Exiting...");
-                        
-                        if (error){
-                            process.exit(1)
-                        }
-                        else{
-                            process.exit(0)
-                        }
-                    }.bind(this)
-
-                    process.on('exit', this.killWorkers.bind(this));
-                    process.on('SIGINT', this.killWorkers.bind(this));
-                    process.on('SIGUSR1', this.killWorkers.bind(this));
-                    process.on('SIGUSR2', this.killWorkers.bind(this));
-                    process.on('uncaughtException', function(err) { this.killWorkers(err); }.bind(this));
-
-                    this.workerGradients = []; // Initialize workerGradients for SharedMemory mode
-
-                    var workers_tasklists = []
-                    var responses = []
-
-                    for (var inde = 0; inde < this.workerthings.length; inde++){
-                        ;(function(index){ // Removed async from IIFE
-                            workers_tasklists.push({
-                                "workerId": this.workerthings[index].workerId,
-                                "tasklist": []
-                            });
-                            const transformerInstance = this; // Capture Transformer's `this`
-                            this.workerthings[index].worker.on("message", async function(message){ // Keep inner handler async
-                                if (message.type === "train_step_feedback_res"){
-                                    for (var r = 0; r < responses.length; r++) {
-                                        if (responses[r].reqId === message.requestId) {
-                                            responses[r].response = message.returns; // `responses` is from outer scope
-                                            break;
-                                        }
-                                    }
-                                }
-                                else{
-                                    if (message.type === "train_step_feedback"){
-                                        this.workerGradients.push(message.gradients)
-                                        transformerInstance.workerthings[index].worker.postMessage({ // Use captured `this`
-                                            "type": "train_step_feedback_res",
-                                            "requestId": message.requestId,
-                                            "response": true
-                                        });
-                                    }
-                                    else{
-                                        if (message.type === "req_data"){
-                                            var walk = function(root, path) { // Define walk locally or ensure it's accessible
-                                                // Handle edge cases
-                                                if (typeof path !== "string" || path.trim() === "") {
-                                                return root;
-                                                }
-                                            
-                                                // Match parts like ["key"] or [0]
-                                                var matcher = /\[(?:'([^']+)'|"([^"]+)"|([0-9]+))\]/g;
-                                                var match;
-                                                var current = root;
-                                            
-                                                while ((match = matcher.exec(path)) !== null) {
-                                                // Get whichever capture group matched
-                                                var key = match[1] !== undefined
-                                                    ? match[1]
-                                                    : match[2] !== undefined
-                                                    ? match[2]
-                                                    : match[3] !== undefined
-                                                    ? parseInt(match[3], 10)
-                                                    : undefined;
-                                            
-                                                // Early-out if the key is missing
-                                                if (current == null || !(key in current)) {
-                                                    return undefined;
-                                                }
-                                            
-                                                current = current[key];
-                                                }
-                                            
-                                                return current;
-                                            };
-
-                                            transformerInstance.workerthings[index].worker.postMessage({ // Use captured `this`
-                                                "type": "req_data_res",
-                                                "requestId": message.requestId,
-                                                "response": walk(transformerInstance, message.pathto) // Use captured `this`
-                                            });
-                                        }
-                                        else{
-                                            if (message.type === "console_log"){
-                                                console.log(message.text);
-                                            }
-                                            else{
-                                                if (message.type === "console_error"){
-                                                    console.error(message.text);
-                                                }
-                                                else{
-                                                    if (message.type === "console_warn"){
-                                                        console.warn(message.text);
-                                                    }
-                                                    else{
-                                                        if (message.type === "console_debug"){
-                                                            console.debug(message.text);
-                                                        }
-                                                        else{
-                                                            if (message.type === "console_info"){
-                                                                console.info(message.text);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }.bind(transformerInstance)); // Bind message handler's `this`
-                            this.workerthings[index].worker.on("exit", function(){
-                                console.log("Worker " + index + " has exited with code " + this.exitCode + ".");
-                            }.bind(transformerInstance));
-                            this.workerthings[index].worker.on("error", function(error){
-                                console.log("Worker " + index + " has errored with error " + error + ".");
-                            }.bind(transformerInstance));
-                        }.bind(this))(inde); // Bind IIFE's `this`
-                    }
-
-                    // In cleanai.js, Transformer.prototype.train (SharedMemory mode)
-                    var worker_train_step = async function(input, target) {
-                        var chosenWorkerEntry = null;
-                        var minTasks = Infinity;
-
-                        if (!workers_tasklists || workers_tasklists.length === 0) {
-                            console.error("FATAL: workers_tasklists is empty or undefined.");
-                            throw new Error("No workers available in task list.");
-                        }
-
-                        for (var w_idx = 0; w_idx < workers_tasklists.length; w_idx++) {
-                            if (workers_tasklists[w_idx].tasklist.length < minTasks) {
-                                minTasks = workers_tasklists[w_idx].tasklist.length;
-                                chosenWorkerEntry = workers_tasklists[w_idx];
-                            }
-                        }
-                        
-                        if (!chosenWorkerEntry) {
-                            // Fallback if all have minTasks (e.g. all 0), pick the first one.
-                            // This path should ideally not be hit if lists are populated.
-                            chosenWorkerEntry = workers_tasklists[0]; 
-                            console.warn("Fallback worker selection in worker_train_step, picking first worker.");
-                        }
-
-                        var workerItemForSubStep = null;
-                        for (var k_idx = 0; k_idx < this.workerthings.length; k_idx++) {
-                            if (this.workerthings[k_idx].workerId === chosenWorkerEntry.workerId) {
-                                workerItemForSubStep = this.workerthings[k_idx];
-                                break;
-                            }
-                        }
-
-                        if (!workerItemForSubStep) {
-                            console.error("FATAL: Could not find a worker object for chosenWorkerEntry ID:", chosenWorkerEntry.workerId);
-                            throw new Error("Worker object lookup failed in worker_train_step");
-                        }
-
-                        // Add a dummy task item to the chosen worker's tasklist
-                        const taskToken = {}; // Unique token for this task
-                        chosenWorkerEntry.tasklist.push(taskToken);
-
-                        try {
-                            return await sub_worker_train_step(input, target, workerItemForSubStep);
-                        } finally {
-                            // Remove the taskToken from the tasklist
-                            const taskIndex = chosenWorkerEntry.tasklist.indexOf(taskToken);
-                            if (taskIndex > -1) {
-                                chosenWorkerEntry.tasklist.splice(taskIndex, 1);
-                            }
-                        }
-                    }.bind(this);
-
-                    var requestIds = []
-
-                    var genReqId = function(){ // This function is used by sub_worker_train_step
-                        while (true){
-                            var id = "";
-                            for (var index = 0; index < 5; index++){ // 5 digits: 100,000 combinations
-                                id += randomRangeInclusive([0, 9]);
-                            }
-                    
-                            var found_in_active_responses = false;
-                            // 'responses' here refers to the `responses` array at line 2251,
-                            // which is used by sub_worker_train_step.
-                            for (var i = 0; i < responses.length; i++){ 
-                                if (responses[i].reqId == id){
-                                    found_in_active_responses = true;
-                                    break;
-                                }
-                            }
-                    
-                            if (!found_in_active_responses){
-                                // No need to push to a global requestIds list.
-                                // The ID is unique among currently active requests tracked in `responses`.
-                                return id;
-                            }
-                            // If found in active responses, loop again.
-                        }
-                    };
-
-                    var sub_worker_train_step = async function(input, target, workerItem){
-                        var worker = workerItem.worker;
-                        var requestId = genReqId();
-                        worker.postMessage({
-                            "type": "train_step",
-                            "requestId": requestId,
-                            "data": {
-                                "input": input,
-                                "target": target
-                            }
-                        })
-                        responses.push({
-                            "reqId": requestId,
-                            "response": null // `responses` is from outer scope
-                        })
-                        
-                        while (true){
-                            for (var r = 0; r < responses.length; r++) {
-                                if (responses[r].reqId === requestId){
-                                    if (responses[r].response !== null){
-                                        var loss_val = responses[r].response; // Get the loss
-                                        responses.splice(r, 1); // <<< MINIMAL FIX 1: Remove completed request
-                                        return loss_val; 
-                                    }
-                                }
-                            }
-                            await wait(1);
-                        }
-                    }.bind(this)
-
                     var batch_losses = [];
                     for (var i = 0; i < tokenized_dataset.length; i++) {
                         var stimer = timer_();
@@ -4467,7 +4485,7 @@ var resolveDependency = async function(dependency){
                                             worker_train_step(input, target).then(function(x){
                                                 batch_total_loss += x;
                                                 dispatched_done++;
-                                                console.log("Worker " + kt + " finished job.")
+                                                console.log("Worker " + (kt + 1) + " finished job.")
                                             })
                                         })(k);
                                         await wait(1)
@@ -4519,7 +4537,7 @@ var resolveDependency = async function(dependency){
                                     worker_train_step(input, target).then(function(x){
                                         batch_total_loss += x;
                                         dispatched_done++;
-                                        console.log("Worker " + kt + " finished job.")
+                                        console.log("Worker " + (kt + 1) + " finished job.")
                                     })
                                 })(k)
                                 await wait(1)
