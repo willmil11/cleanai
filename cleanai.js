@@ -4070,8 +4070,8 @@ var resolveDependency = async function(dependency){
                                 }
                             }
                         }.bind(transformerInstance)); // Bind message handler's `this`
-                        this.workerthings[index].worker.on("exit", function(){
-                            console.log("Worker " + index + " has exited with code " + this.exitCode + ".");
+                        this.workerthings[index].worker.on("exit", function(code){
+                            console.log("Worker " + index + " has exited with code " + code + ".");
                         }.bind(transformerInstance));
                         this.workerthings[index].worker.on("error", function(error){
                             console.log("Worker " + index + " has errored with error " + error + ".");
@@ -4444,7 +4444,243 @@ var resolveDependency = async function(dependency){
                 }
                 else{
                     //Mode is SharedMemory
-    
+
+                    if (!(config.batchSize === this.workerthings.length)){
+                        console.log("Batch size was change, adding/removing workers to match batch size.")
+                        // for (var i = 0; i < (Math.abs(config.batchSize - this.workerthings.length)); i++){
+
+                        // }
+
+                        var at = 0;
+                        while (!(config.batchSize === this.workerthings.length)){
+                            if ((config.batchSize - this.workerthings.length).toString().includes("-")){
+                                var timer = timer_()
+                                //negative
+                                console.log("Killing worker " + at + "/" + Math.abs(config.batchSize - this.workerthings.length))
+                                this.workerthings[0]["worker"].terminate() 
+                                this.workerthings.splice(0, 1)
+                                console.log("Worker " + at + "/" + Math.abs(config.batchSize - this.workerthings.length) + " killed in " + timer_end(timer) + " ms")
+                            }
+                            else{
+                                var timer = timer_()
+                                //positive
+                                console.log("Spawning worker " + at + "/" + Math.abs(config.batchSize - this.workerthings.length))
+                                var timer = timer_();
+                                
+                                var generateWorkerId = function(){
+                                    while (true){
+                                        var id = ""
+                                        //5 long
+                                        for (var i = 0; i < 5; i++){
+                                            id += randomRangeInclusive([0, 9])
+                                        }
+                                        var found = false
+                                        for (var i = 0; i < workerIds.length; i++){
+                                            if (workerIds[i] === id){
+                                                found = true
+                                                break
+                                            }
+                                        }
+                                        if (!found){
+                                            workerIds.push(id)
+                                            return id
+                                        }
+                                    }
+                                }
+        
+                                var worker_threads = require("worker_threads")
+                                var worker_spawner = worker_threads.Worker
+        
+                                var workerId = generateWorkerId()
+        
+                                console.log("Dispatching worker with id " + workerId)
+        
+                                if (submode === "Turtle"){
+                                    var worker = new worker_spawner("./worker.js", {
+                                        "workerData": {
+                                            "id": workerId,
+                                            "type": "persistant_spawn",
+                                            "data": {
+                                                "modelData": {
+                                                    "embeddingSize": this.embeddingSize,
+                                                    "nan_checks_enabled": this.nan_checks_enabled,
+                                                    "heads": this.heads,
+                                                    "layersAmount": this.layersAmount,
+                                                    "contextSize": this.contextSize,
+                                                    "antiOverfittingOptimisations": config.antiOverfittingOptimisations,
+                                                    "batchSize": config.batchSize,
+                                                    "vocab": this.vocab,
+                                                    "lookupTable": this.id_to_token
+                                                },
+                                                "transformer_data": {
+                                                    "transformer": this.transformer
+                                                }
+                                            },
+                                            "submode": submode
+                                        }
+                                    }, {"execArgv": [
+                                        "--expose-gc",
+                                        "--max-old-space-size=9999999999999",
+                                        "--no-opt",
+                                        "--interpreted-frames-native-stack"
+                                    ]});
+                                    console.log("Worker " + at + "/" + Math.abs(config.batchSize - this.workerthings.length) + " spawned in " + timer_end(timer) + " ms")
+                                    this.workerthings.push({
+                                        "workerId": workerId,
+                                        "worker": worker
+                                    })
+                                }
+                                else{
+                                    if (submode === "Rabbit"){
+                                        var worker = new worker_spawner("./worker.js", {
+                                            "workerData": {
+                                                "id": workerId,
+                                                "type": "persistant_spawn",
+                                                "data": {
+                                                    "modelData": {
+                                                        "embeddingSize": this.embeddingSize,
+                                                        "nan_checks_enabled": this.nan_checks_enabled,
+                                                        "heads": this.heads,
+                                                        "layersAmount": this.layersAmount,
+                                                        "contextSize": this.contextSize,
+                                                        "antiOverfittingOptimisations": config.antiOverfittingOptimisations,
+                                                        "batchSize": config.batchSize,
+                                                        "vocab": this.vocab,
+                                                        "lookupTable": this.id_to_token
+                                                    }
+                                                },
+                                                "submode": submode
+                                            }
+                                        }, {"execArgv": [
+                                            "--expose-gc",
+                                            "--max-old-space-size=9999999999999",
+                                            "--no-opt",
+                                            "--interpreted-frames-native-stack"
+                                        ]})
+                                    }
+                                    else{
+                                        console.error("Submode is invalid. Should be either Rabbit or Turtle.")
+                                        console.error("Submode is \"" + submode + "\"")
+                                        process.exit(1)
+                                    }
+                                    this.workerthings.push({
+                                        "workerId": workerId,
+                                        "worker": worker
+                                    })
+                                    console.log("Worker " + at + "/" + Math.abs(config.batchSize - this.workerthings.length) + " spawned in " + timer_end(timer) + " ms")
+                                }
+                                at++
+                            }
+                        }
+
+                        console.log("Refeshing load balencing and setting worker events...")
+                        var timer = timer_()
+                        workers_tasklists = []
+                        for (var inde = 0; inde < this.workerthings.length; inde++){
+                            this.workerthings[inde].worker.removeAllListeners()
+                            ;(function(index){ // Removed async from IIFE
+                                workers_tasklists.push({
+                                    "workerId": this.workerthings[index].workerId,
+                                    "tasklist": []
+                                });
+                                const transformerInstance = this; // Capture Transformer's `this`
+                                this.workerthings[index].worker.on("message", async function(message){ // Keep inner handler async
+                                    if (message.type === "train_step_feedback_res"){
+                                        for (var r = 0; r < responses.length; r++) {
+                                            if (responses[r].reqId === message.requestId) {
+                                                responses[r].response = message.returns; // `responses` is from outer scope
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else{
+                                        if (message.type === "train_step_feedback"){
+                                            this.workerGradients.push(message.gradients)
+                                            transformerInstance.workerthings[index].worker.postMessage({ // Use captured `this`
+                                                "type": "train_step_feedback_res",
+                                                "requestId": message.requestId,
+                                                "response": true
+                                            });
+                                        }
+                                        else{
+                                            if (message.type === "req_data"){
+                                                var walk = function(root, path) { // Define walk locally or ensure it's accessible
+                                                    // Handle edge cases
+                                                    if (typeof path !== "string" || path.trim() === "") {
+                                                    return root;
+                                                    }
+                                                
+                                                    // Match parts like ["key"] or [0]
+                                                    var matcher = /\[(?:'([^']+)'|"([^"]+)"|([0-9]+))\]/g;
+                                                    var match;
+                                                    var current = root;
+                                                
+                                                    while ((match = matcher.exec(path)) !== null) {
+                                                    // Get whichever capture group matched
+                                                    var key = match[1] !== undefined
+                                                        ? match[1]
+                                                        : match[2] !== undefined
+                                                        ? match[2]
+                                                        : match[3] !== undefined
+                                                        ? parseInt(match[3], 10)
+                                                        : undefined;
+                                                
+                                                    // Early-out if the key is missing
+                                                    if (current == null || !(key in current)) {
+                                                        return undefined;
+                                                    }
+                                                
+                                                    current = current[key];
+                                                    }
+                                                
+                                                    return current;
+                                                };
+        
+                                                transformerInstance.workerthings[index].worker.postMessage({ // Use captured `this`
+                                                    "type": "req_data_res",
+                                                    "requestId": message.requestId,
+                                                    "response": walk(transformerInstance, message.pathto) // Use captured `this`
+                                                });
+                                            }
+                                            else{
+                                                if (message.type === "console_log"){
+                                                    console.log(message.text);
+                                                }
+                                                else{
+                                                    if (message.type === "console_error"){
+                                                        console.error(message.text);
+                                                    }
+                                                    else{
+                                                        if (message.type === "console_warn"){
+                                                            console.warn(message.text);
+                                                        }
+                                                        else{
+                                                            if (message.type === "console_debug"){
+                                                                console.debug(message.text);
+                                                            }
+                                                            else{
+                                                                if (message.type === "console_info"){
+                                                                    console.info(message.text);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }.bind(transformerInstance)); // Bind message handler's `this`
+                                this.workerthings[index].worker.on("exit", function(code){
+                                    console.log("Worker " + index + " has exited with code " + code + ".");
+                                }.bind(transformerInstance));
+                                this.workerthings[index].worker.on("error", function(error){
+                                    console.log("Worker " + index + " has errored with error " + error + ".");
+                                }.bind(transformerInstance));
+                            }.bind(this))(inde); // Bind IIFE's `this`
+                        }
+                        console.log("Reloaded load balencing and set worker events in " + timer_end(timer) + "ms.")
+                    }
+
                     if (!continue_training) { // This check should be after potential state resets
                         ndprint("Training stopped at epoch " + epoch + "/" + epochs);
                         break;
@@ -4558,13 +4794,14 @@ var resolveDependency = async function(dependency){
                             dataset_total_loss += batch_total_loss;
                             sequence_positions += batch_samples.length;
                             processed_io_pairs += batch_samples.length;
+                            var actual_batch_size = batch_samples.length;
                             batch_samples = []; // Clear the batch
 
                             var response_tokens_in_item = token_mask.reduce(function(a, b) { return a + (b ? 1 : 0); }, 0);
                             var current_position_in_responses = token_mask.reduce(function(a, b) { return a + (b ? 1 : 0); }, 0); // Assume all were processed by the end
                             var current_item_progress = 100; // Item is finished
                             var overall_progress = (processed_io_pairs / total_io_pairs) * 100;
-                            ndprint("Final partial batch completed. Loss: " + (batch_total_loss / batch_samples.length).toFixed(4) + " (Response token " + current_position_in_responses + "/" + response_tokens_in_item + ") | " +
+                            ndprint("Final partial batch completed. Loss: " + (batch_total_loss / actual_batch_size).toFixed(4) + " (Response token " + current_position_in_responses + "/" + response_tokens_in_item + ") | " +
                                 "Current item progress: " + current_item_progress.toFixed(2) + "% | " +
                                 "Overall progress: " + overall_progress.toFixed(2) + "%");
                         }
@@ -4602,25 +4839,27 @@ var resolveDependency = async function(dependency){
                     var in_sweet_spot = (avg_epoch_loss >= sweet_spot_min && avg_epoch_loss <= sweet_spot_max);
                     var first_time_in_sweet_spot = in_sweet_spot && (last_saved_sweet_spot_loss === Infinity);
                     var significant_progress = in_sweet_spot && ((last_saved_sweet_spot_loss - avg_epoch_loss) >= 0.5);
-                    if (first_time_in_sweet_spot || significant_progress) {
-                        var loss_str = avg_epoch_loss.toFixed(2);
-                        var save_path = "model_" + (epoch + 1) + "_" + loss_str + "_" + optimizer + "_sweetspot.zip";
-                        if (first_time_in_sweet_spot) {
-                            ndprint("\n" + "-".repeat(60));
-                            ndprint("REACHED SWEET SPOT LOSS! Auto-saving model");
-                            ndprint("-".repeat(60) + "\n");
-                        } else {
-                            ndprint("\n" + "-".repeat(60));
-                            ndprint("SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model");
-                            ndprint("Previous saved: " + last_saved_sweet_spot_loss.toFixed(2) + ", Current: " + avg_epoch_loss.toFixed(2));
-                            ndprint("-".repeat(60) + "\n");
-                        }
-                        try {
-                            await this.save(save_path);
-                            ndprint("Sweet spot model saved to " + save_path);
-                            last_saved_sweet_spot_loss = avg_epoch_loss;
-                        } catch (e) {
-                            ndprint("Error saving sweet spot model: " + e);
+                    if (!config.noSweetSpotSaving){
+                        if (first_time_in_sweet_spot || significant_progress) {
+                            var loss_str = avg_epoch_loss.toFixed(2);
+                            var save_path = "model_" + (epoch + 1) + "_" + loss_str + "_" + optimizer + "_sweetspot.zip";
+                            if (first_time_in_sweet_spot) {
+                                ndprint("\n" + "-".repeat(60));
+                                ndprint("REACHED SWEET SPOT LOSS! Auto-saving model");
+                                ndprint("-".repeat(60) + "\n");
+                            } else {
+                                ndprint("\n" + "-".repeat(60));
+                                ndprint("SIGNIFICANT IMPROVEMENT IN SWEET SPOT! Auto-saving model");
+                                ndprint("Previous saved: " + last_saved_sweet_spot_loss.toFixed(2) + ", Current: " + avg_epoch_loss.toFixed(2));
+                                ndprint("-".repeat(60) + "\n");
+                            }
+                            try {
+                                await this.save(save_path);
+                                ndprint("Sweet spot model saved to " + save_path);
+                                last_saved_sweet_spot_loss = avg_epoch_loss;
+                            } catch (e) {
+                                ndprint("Error saving sweet spot model: " + e);
+                            }
                         }
                     }
                     if (is_best_loss) {
@@ -5399,6 +5638,7 @@ var resolveDependency = async function(dependency){
             ndprint("  /stop            Stop training");
             ndprint("  /save [path]     Save model (optional path, default is model_optimizer.zip)");
             ndprint("  /switch_to_*     Switch optimizer (sgd, adam, sgd_momentum)");
+            ndprint("  /batchSize X     Set or view batch size");
             ndprint("  /temperature X   Set or view temperature");
             ndprint("  /info            Show current training info");
             ndprint("  /help            Show this help message");
@@ -5440,6 +5680,22 @@ var resolveDependency = async function(dependency){
                     } else {
                         ndprint("[Error] Unknown optimizer.");
                     }
+                } else if (user_input.indexOf("/batchSize") === 0) {
+                    var parts = user_input.split(" ", 2);
+                    if (parts.length < 2) {
+                        ndprint("[Current Batch Size] " + config.batchSize);
+                    } else {
+                        try {
+                            var batchSize = parseInt(parts[1]);
+                            if (isNaN(batchSize) || batchSize <= 0) {
+                                throw new Error("Invalid value");
+                            }
+                            config.batchSize = batchSize;
+                            ndprint("[Info] Set batch size to " + batchSize);
+                        } catch (e) {
+                            ndprint("[Error] Invalid value.");
+                        }
+                    }
                 } else if (user_input.indexOf("/temperature") === 0) {
                     var parts = user_input.split(" ", 2);
                     if (parts.length < 2) {
@@ -5472,6 +5728,7 @@ var resolveDependency = async function(dependency){
                         ndprint(`  Avg Loss (Last 10 epochs): N/A (history too short)`);
                     }
                     ndprint(`  Current Temperature: ${this.temperature}`);
+                    ndprint(`  Current Batch Size: ${config.batchSize}`);
                     ndprint("---------------------");
                 } else if (user_input === "/help") {
                     ndprint("Available commands:");
@@ -5479,6 +5736,7 @@ var resolveDependency = async function(dependency){
                     ndprint("  /stop            Stop training");
                     ndprint("  /save [path]     Save model (optional path, default is model_optimizer.zip)");
                     ndprint("  /switch_to_*     Switch optimizer (sgd, adam, sgd_momentum)");
+                    ndprint("  /batchSize X     Set or view batch size");
                     ndprint("  /temperature X   Set or view temperature");
                     ndprint("  /info            Show current training info");
                     ndprint("  /help            Show this help message");
