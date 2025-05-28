@@ -1,4 +1,4 @@
-# Cleanai 2.0.0 Nightly 2.5
+# Cleanai 2.0.0 Nightly 3
 ## What is this?
 This is a project of mine that as of 19.05.2025 I've been working on for about 4 months (since 27.01.2025). This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization, readline-sync for the interactive console mode, uuid for random string generation, zip librairies (archiver and yauzl) to load/save models and ws for future remote device support. No ml (machine learning) librairies like pytorch or tensorflow. Only pure raw javascript and no abstractions.
 
@@ -44,6 +44,9 @@ Refer to the <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/
 - 1.0.0 — Original release.
 
 ## Nightly versions (only github)
+### Nightly versions before 2.0.0 stable:
+<strong>Note</strong>: Next Nightly version (2.0.0 Nightly 4) will be uploaded as a nightly then directly as a stable as it will aim to break into chunks some of the functions in worker.js to stop running out of turbofan zone memory which would have for effect to allow me to remove the --no-opt flag from the worker spawn and therefore boost the speed by about 30% which would make the local multithreading as good as it can be and therefore make it a stable version.
+- 2.0.0 Nightly 3 — Removed what 2.0.0 Nightly 2.5 added as it created a bug I could not fix. Also officially added "noSweetSpotSaving" option to the config, it is self explanatory, however I still added it to the guide.
 - 2.0.0 Nightly 2.5 — Works exactly as 2.0.0 Nightly 2 except there's a command to change batch size in interactive mode, except it crashes everything, don't use it!
 - 2.0.0 Nightly 2 — Stabilized but slow (still faster than single threaded).
 - 2.0.0 Nightly — Very unstable, but cpu multicore is almost here. THIS IS <strong>NOT</strong> A STABLE BUILD, DO NOT USE FOR ACTUAL USAGE, USE THE LATEST NPM BUILD FOR THAT PURPOSE.

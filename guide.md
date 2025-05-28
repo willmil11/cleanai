@@ -51,7 +51,8 @@ Example structure for a model:
     "batchSize": 24, //Only required if you use the --train or --pretrain flag.
     "biasesinitrange": [-0.01, 0.01], //Forbidden if you load a model instead of making a new one
     "embeddinginitrange": [-0.1, 0.1], //Forbidden if you load a model instead of making a new one
-    "antiOverfittingOptimisations": true
+    "antiOverfittingOptimisations": true,
+    "noSweetSpotSaving": false //Optional, if you use the --train or --pretrain flag.
 }
 ```
 Here's what each parameter is for:
@@ -71,6 +72,7 @@ Here's what each parameter is for:
 - biasesinitrange: The range of the random values that will be used to initialize the biases of the model, I recommend keeping the current one. This is forbidden if you load a model instead of making a new one.
 - embeddinginitrange: The range of the random values that will be used to initialize the embeddings of the model, I recommend keeping the current one. This is forbidden if you load a model instead of making a new one.
 - antiOverfittingOptimisations: This is a boolean that will enable or disable the anti overfitting optimisations, I recommend keeping it on as it will make the model more general and less likely to overfit.
+- noSweetSpotSaving: This is a completely optional boolean value, not putting it will have the same effect as setting it to false, set it to true to disable sweet spot saving. In general you should not put it as the sweet spot saving feature is pretty cool if you don't wanna save manually.
 
 ## Dataset
 Dataset should be a json file with the following structure:

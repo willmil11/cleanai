@@ -19,7 +19,7 @@
 //
 // Drop a star on the github repo if you like it :D
 
-var tresholdworkersworthit = 27;
+var tresholdworkersworthit = 27; //This is for remote mode that is not activated by default so ignore it.
 
 var mode = "SharedMemory" //Could also be "Remote"
 var submode = "Turtle" //Could also be "Rabbit"
@@ -5638,7 +5638,7 @@ var resolveDependency = async function(dependency){
             ndprint("  /stop            Stop training");
             ndprint("  /save [path]     Save model (optional path, default is model_optimizer.zip)");
             ndprint("  /switch_to_*     Switch optimizer (sgd, adam, sgd_momentum)");
-            ndprint("  /batchSize X     Set or view batch size");
+            //ndprint("  /batchSize X     Set or view batch size");
             ndprint("  /temperature X   Set or view temperature");
             ndprint("  /info            Show current training info");
             ndprint("  /help            Show this help message");
@@ -5680,23 +5680,25 @@ var resolveDependency = async function(dependency){
                     } else {
                         ndprint("[Error] Unknown optimizer.");
                     }
-                } else if (user_input.indexOf("/batchSize") === 0) {
-                    var parts = user_input.split(" ", 2);
-                    if (parts.length < 2) {
-                        ndprint("[Current Batch Size] " + config.batchSize);
-                    } else {
-                        try {
-                            var batchSize = parseInt(parts[1]);
-                            if (isNaN(batchSize) || batchSize <= 0) {
-                                throw new Error("Invalid value");
-                            }
-                            config.batchSize = batchSize;
-                            ndprint("[Info] Set batch size to " + batchSize);
-                        } catch (e) {
-                            ndprint("[Error] Invalid value.");
-                        }
-                    }
-                } else if (user_input.indexOf("/temperature") === 0) {
+                } 
+                // else if (user_input.indexOf("/batchSize") === 0) {
+                //     var parts = user_input.split(" ", 2);
+                //     if (parts.length < 2) {
+                //         ndprint("[Current Batch Size] " + config.batchSize);
+                //     } else {
+                //         try {
+                //             var batchSize = parseInt(parts[1]);
+                //             if (isNaN(batchSize) || batchSize <= 0) {
+                //                 throw new Error("Invalid value");
+                //             }
+                //             config.batchSize = batchSize;
+                //             ndprint("[Info] Set batch size to " + batchSize);
+                //         } catch (e) {
+                //             ndprint("[Error] Invalid value.");
+                //         }
+                //     }
+                // } 
+                else if (user_input.indexOf("/temperature") === 0) {
                     var parts = user_input.split(" ", 2);
                     if (parts.length < 2) {
                         ndprint("[Current Temperature] " + this.temperature);
@@ -5736,7 +5738,7 @@ var resolveDependency = async function(dependency){
                     ndprint("  /stop            Stop training");
                     ndprint("  /save [path]     Save model (optional path, default is model_optimizer.zip)");
                     ndprint("  /switch_to_*     Switch optimizer (sgd, adam, sgd_momentum)");
-                    ndprint("  /batchSize X     Set or view batch size");
+                    //ndprint("  /batchSize X     Set or view batch size");
                     ndprint("  /temperature X   Set or view temperature");
                     ndprint("  /info            Show current training info");
                     ndprint("  /help            Show this help message");
