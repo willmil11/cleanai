@@ -846,6 +846,10 @@ var resolveDependency = async function(dependency){
                 }
             }
         }
+
+        if (configtoparse.noSweetSpotSaving !== undefined && typeof configtoparse.noSweetSpotSaving !== "boolean") {
+            configError("If specified, noSweetSpotSaving must be a boolean.")
+        }
     
         config = configtoparse;
         console.log("Config file loaded successfully.");
