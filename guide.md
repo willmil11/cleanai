@@ -155,9 +155,11 @@ Well search no more, here: <a href="https://github.com/willmil11/cleanai/blob/ma
 
 ## What each file does
 - cleanai.js: Code of the ai.
+- worker.js: Code of the worker spawned for multithreading.
 - package.json: Info for npm.
-- quickstart.md: What you're reading rn.
-- README.md: Main readme, what you land on when you go on the repo on github.
+- guide.md: What you're reading rn.
+- example.md: Very basic example of how to use the cli.
+- README.md: Main readme, what you land on when you go on the repo on github or npm page.
 - vocabulary.json: Tiktoken gpt4 vocabulary but cleaned of tokens I didn't like.
 - LICENSE: MIT license.
 - deprecated directory: Refer to <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/deprecated.md">deprecated readme</a>

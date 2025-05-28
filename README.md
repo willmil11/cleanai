@@ -1,4 +1,4 @@
-# Cleanai 2.0.1
+# Cleanai 2.0.2
 ## What is this?
 This is a project of mine that as of 28.05.2025 I've been working on for about 4 months (since 27.01.2025). This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization, readline-sync for the interactive console mode, uuid for random string generation, zip librairies (archiver and yauzl) to load/save models and ws for future remote device support. No ml (machine learning) librairies like pytorch or tensorflow. Only pure raw javascript and no abstractions.
 
@@ -40,6 +40,7 @@ If you're on the npm page, check out and perhaps star the <a href="https://githu
 Refer to the <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/deprecated.md">deprecated readme</a>
 
 ## Version history
+- 2.0.2 — More readme fixes.
 - 2.0.1 — Readme fixes.
 - 2.0.0 — Added local multithreaded.
 - 1.0.1 — Readme fixes.
