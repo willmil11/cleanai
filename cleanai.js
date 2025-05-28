@@ -3786,7 +3786,7 @@ var resolveDependency = async function(dependency){
                         console.log("Dispatching worker with id " + workerId)
 
                         if (submode === "Turtle"){
-                            var worker = new worker_spawner("./worker.js", {
+                            var worker = new worker_spawner(__dirname + "/worker.js", {
                                 "workerData": {
                                     "id": workerId,
                                     "type": "persistant_spawn",
@@ -3817,7 +3817,7 @@ var resolveDependency = async function(dependency){
                         }
                         else{
                             if (submode === "Rabbit"){
-                                var worker = new worker_spawner("./worker.js", {
+                                var worker = new worker_spawner(__dirname + "/worker.js", {
                                     "workerData": {
                                         "id": workerId,
                                         "type": "persistant_spawn",
@@ -4500,7 +4500,7 @@ var resolveDependency = async function(dependency){
                                 console.log("Dispatching worker with id " + workerId)
         
                                 if (submode === "Turtle"){
-                                    var worker = new worker_spawner("./worker.js", {
+                                    var worker = new worker_spawner(__dirname + "/worker.js", {
                                         "workerData": {
                                             "id": workerId,
                                             "type": "persistant_spawn",
@@ -4536,7 +4536,7 @@ var resolveDependency = async function(dependency){
                                 }
                                 else{
                                     if (submode === "Rabbit"){
-                                        var worker = new worker_spawner("./worker.js", {
+                                        var worker = new worker_spawner(__dirname + "/worker.js", {
                                             "workerData": {
                                                 "id": workerId,
                                                 "type": "persistant_spawn",
