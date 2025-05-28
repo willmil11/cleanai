@@ -1,4 +1,4 @@
-# Cleanai 2.0.0
+# Cleanai 2.0.1
 ## What is this?
 This is a project of mine that as of 28.05.2025 I've been working on for about 4 months (since 27.01.2025). This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization, readline-sync for the interactive console mode, uuid for random string generation, zip librairies (archiver and yauzl) to load/save models and ws for future remote device support. No ml (machine learning) librairies like pytorch or tensorflow. Only pure raw javascript and no abstractions.
 
@@ -6,13 +6,13 @@ This is a project of mine that as of 28.05.2025 I've been working on for about 4
 Look at the guide: <a href="https://github.com/willmil11/cleanai/blob/main/guide.md">guide</a>
 
 ## Can I use this to train my AI?
-Absolutely, however for now it will be slower than pytorch or tensorflow, however not for long, as you can see this is a multithreaded cpu nightly version, with coming updates we will have multiple remote device support and gpu support so it will be as good or better. The speed is already very good for small models.
+Absolutely, normally it should be as fast as pytorch or tensorflow for cpu only training/pre-training/inference. It will work and it will be easier to use than tensorflow or pytorch too.
 
-## If its slower than pytorch and tensorflow, why would I use this?
+## Pytorch and tensorflow already exist, why would I use this?
 Because:
 - The CLI is WAYYYY easier to use than pytorch and tensorflow
 - You can see how everything works, no black box
-- There are coming updates that I'm cooking up for this project that will conserve it's ease to use and accelerate it's speed by a lot, also adding features that you can not get with pytorch or tensorflow without HEAVY config and a lot of complicated work.
+- There are coming updates that I'm cooking up for this project that will conserve it's ease to use and accelerate it's speed by a lot (remote multithreaded), also adding features that you can not get with pytorch or tensorflow without HEAVY config and a lot of complicated work.
 - This is made by an actual person working alone not some megacorp like pytorch (Meta) or tensorflow (Google)
 
 ## Why?
@@ -40,6 +40,7 @@ If you're on the npm page, check out and perhaps star the <a href="https://githu
 Refer to the <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/deprecated.md">deprecated readme</a>
 
 ## Version history
+- 2.0.1 — Readme fixes.
 - 2.0.0 — Added local multithreaded.
 - 1.0.1 — Readme fixes.
 - 1.0.0 — Original release.
