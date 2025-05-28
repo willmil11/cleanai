@@ -902,7 +902,7 @@ var resolveDependency = async function(dependency){
             };
             ndprint("Trying to read vocabulary file...");
             try {
-                this.vocab = JSON.parse(fs.readFileSync("vocabulary.json", "utf-8"));
+                this.vocab = JSON.parse(fs.readFileSync(__dirname + "/vocabulary.json", "utf-8"));
             } catch (e) {
                 console.log("Failed to read vocabulary file, creating error...");
                 throw new Error("Failed to read vocabulary file");
