@@ -150,6 +150,9 @@ Interactive mode will trigger every time a new epoch is completed and will expir
 ## Final console
 After all the epochs have been completed or you /stop the training while in interactive mode, you will land in the final console which is basically interactive mode without the in-training features. There you can execute /help for a list of commands as usual.
 
+## Webui
+If you use the --webui flag at the end of your command, a link will be shown to you for 30 seconds or until you click it. This link allows you to monitor on a web interface the current state of your training or pre-training run.
+
 ## Are you still lost perhaps? Looking for a practical example?
 Well search no more, here: <a href="https://github.com/willmil11/cleanai/blob/main/example.md">example</a>.
 

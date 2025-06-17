@@ -447,15 +447,19 @@ var resolveDependency = async function(dependency){
         console.log(spacing() + " ".repeat(" --new".length) + "--config path/to/config.json");
         console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + "--train");
         console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + " ".repeat("--pretrain".length) + "[--pretrain]");
+        console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + " ".repeat("--pretrain".length) + " ".repeat("[--pretrain]".length) + "[--webui]")
         console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + "--pretrain");
         console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + " ".repeat("--pretrain".length) + "[--train]");
+        console.log(spacing() + " ".repeat(" --new".length) + " ".repeat("--config path/to/config.json".length) + " ".repeat("--pretrain".length) + " ".repeat("[--train]".length) + "   [--webui]")
         console.log(spacing() + " --load path/to/model.zip");
         console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + "[--config path/to/config.json]");
         console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + "[--train]");
         console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + " ".repeat("[--train]".length) + "   [--pretrain]");
+        console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + " ".repeat("--pretrain".length) + " ".repeat("[--pretrain]".length) + "  [--webui]")
         console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + "[--pretrain]");
         console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + " ".repeat("[--pretrain]".length) + "[--train]");
-        
+        console.log(spacing() + " ".repeat(" --load path/to/model.zip".length) + " ".repeat("[--config path/to/config.json]".length) + " ".repeat("--pretrain".length) + " ".repeat("[--train]".length) + "     [--webui]")
+
         console.log("");
         
         console.log("Note: Arguments between square brackets ([...]) are optional.");
@@ -471,6 +475,7 @@ var resolveDependency = async function(dependency){
     var skipnext = false;
     var config_location = null;
     var model_location = null;
+    var use_web_ui = false;
 
     if (args.length === 0) {
         help();
@@ -509,20 +514,26 @@ var resolveDependency = async function(dependency){
                         if (args[i + 1] !== "--train") {
                             if (args[i + 1] !== "--pretrain") {
                                 if (args[i + 1] !== "--config") {
-                                    model_location = args[i + 1];
-                                    if (!fs.existsSync(model_location)) {
-                                        help("Model file " + model_location + " does not exist.");
+                                    if (args[i + 1] !== "--webui"){
+                                        model_location = args[i + 1];
+                                        if (!fs.existsSync(model_location)) {
+                                            help("Model file " + model_location + " does not exist.");
+                                            process.exit(0);
+                                        }
+                                        if (!fs.statSync(model_location).isFile()) {
+                                            help("Model file " + model_location + " is not a file.");
+                                            process.exit(0);
+                                        }
+                                        if (model_location.slice(-4) !== ".zip") {
+                                            help("Model file " + model_location + " is not a zip file.");
+                                            process.exit(0);
+                                        }
+                                        skipnext = true;
+                                    }
+                                    else{
+                                        help("You need to specify a model file after --load.")
                                         process.exit(0);
                                     }
-                                    if (!fs.statSync(model_location).isFile()) {
-                                        help("Model file " + model_location + " is not a file.");
-                                        process.exit(0);
-                                    }
-                                    if (model_location.slice(-4) !== ".zip") {
-                                        help("Model file " + model_location + " is not a zip file.");
-                                        process.exit(0);
-                                    }
-                                    skipnext = true;
                                 } else {
                                     help("You need to specify a model file after --load.");
                                     process.exit(0);
@@ -575,17 +586,23 @@ var resolveDependency = async function(dependency){
                         if (args[i + 1] !== "--train") {
                             if (args[i + 1] !== "--pretrain") {
                                 if (args[i + 1] !== "--config") {
-                                    config_location = args[i + 1];
-                                    if (!fs.existsSync(config_location)) {
-                                        help("Config file " + config_location + " does not exist.");
-                                        process.exit(0);
+                                    if (args[i + 1] !== "--webui"){
+                                        config_location = args[i + 1];
+                                        if (!fs.existsSync(config_location)) {
+                                            help("Config file " + config_location + " does not exist.");
+                                            process.exit(0);
+                                        }
+                                        if (!fs.statSync(config_location).isFile()) {
+                                            help("Config file " + config_location + " is not a file.");
+                                            process.exit(0);
+                                        }
+                                        if (config_location.slice(-5) !== ".json") {
+                                            help("Config file " + config_location + " is not a json file.");
+                                            process.exit(0);
+                                        }
                                     }
-                                    if (!fs.statSync(config_location).isFile()) {
-                                        help("Config file " + config_location + " is not a file.");
-                                        process.exit(0);
-                                    }
-                                    if (config_location.slice(-5) !== ".json") {
-                                        help("Config file " + config_location + " is not a json file.");
+                                    else{
+                                        help("You need to specify a config file after --config.");
                                         process.exit(0);
                                     }
                                 } else {
@@ -610,6 +627,14 @@ var resolveDependency = async function(dependency){
                 }
                 skipnext = true;
                 continue;
+            } else if (arg === "--webui"){
+                if (!(training__)){
+                    if (!(pretraining__)){
+                        help("You need to specify either --train or --pretrain or both to use webui mode.")
+                        process.exit(0);
+                    }
+                }
+                use_web_ui = true;
             } else {
                 help("Argument " + arg + " not recognised.");
                 process.exit(0);
@@ -889,6 +914,218 @@ var resolveDependency = async function(dependency){
     function random_range(range) {
         // Return random float between range[0] and range[1] (inclusive)
         return Math.random() * (range[1] - range[0]) + range[0];
+    }
+
+    var feedbacker = function(){}
+
+    if (use_web_ui){
+        var anyclient = false;
+
+        console.log("Initialising webui backend...")
+        console.log("Initialising webui websocket server...")
+        
+        var ws = new WebSocket.Server({"port": 0})
+
+        ws.on("listening", function(){
+            var original_console_log = console.log
+            console.log = function(...args){
+                original_console_log(...args)
+                try{
+                    var clients = Array.from(ws.clients); // convert Set to array
+                    for (var i = 0; i < clients.length; i++) {
+                        if (clients[i].readyState === WebSocket.OPEN) {
+                            clients[i].send(JSON.stringify({
+                                "type": "log",
+                                "data": {
+                                    "log": args.map(String).join(" "),
+                                }
+                            }));
+                        }
+                    }
+                }
+                catch (error){}
+            }
+
+            var original_console_error = console.error;
+            console.error = function (...args) {
+                original_console_error(...args);
+                try {
+                    var clients = Array.from(ws.clients); // convert Set to array
+                    for (var i = 0; i < clients.length; i++) {
+                        if (clients[i].readyState === WebSocket.OPEN) {
+                            clients[i].send(JSON.stringify({
+                                "type": "log",
+                                "data": {
+                                    "log": args.map(String).join(" "),
+                                }
+                            }));
+                        }
+                    }
+                } catch (error) {}
+            };
+
+            var original_console_info = console.info;
+            console.info = function (...args) {
+                original_console_info(...args);
+                try {
+                    var clients = Array.from(ws.clients); // convert Set to array
+                    for (var i = 0; i < clients.length; i++) {
+                        if (clients[i].readyState === WebSocket.OPEN) {
+                            clients[i].send(JSON.stringify({
+                                "type": "log",
+                                "data": {
+                                    "log": args.map(String).join(" "),
+                                }
+                            }));
+                        }
+                    }
+                } catch (error) {}
+            };
+
+            var original_console_warn = console.warn;
+            console.warn = function (...args) {
+                original_console_warn(...args);
+                try {
+                    var clients = Array.from(ws.clients); // convert Set to array
+                    for (var i = 0; i < clients.length; i++) {
+                        if (clients[i].readyState === WebSocket.OPEN) {
+                            clients[i].send(JSON.stringify({
+                                "type": "log",
+                                "data": {
+                                    "log": args.map(String).join(" "),
+                                }
+                            }));
+                        }
+                    }
+                } catch (error) {}
+            };
+
+            var original_console_debug = console.debug;
+            console.debug = function (...args) {
+                original_console_debug(...args);
+                try {
+                    var clients = Array.from(ws.clients); // convert Set to array
+                    for (var i = 0; i < clients.length; i++) {
+                        if (clients[i].readyState === WebSocket.OPEN) {
+                            clients[i].send(JSON.stringify({
+                                "type": "log",
+                                "data": {
+                                    "log": args.map(String).join(" "),
+                                }
+                            }));
+                        }
+                    }
+                } catch (error) {}
+            };
+
+            var port = ws.address().port;
+            console.log("Webui websocket server is running on port " + port)
+
+            feedbacker_cache = {
+                "epoch": 0,
+                "loss": "Waiting for epoch 1",
+                "loss_history": []
+            }
+
+            ws.on("connection", function(client) {
+                if (!(anyclient)){
+                    anyclient = true;
+                }
+                console.log("[Webui] New client connected.")
+                client.send(JSON.stringify({
+                    "type": "epoch_update",
+                    "data": {
+                        "curr_epoch": feedbacker_cache["epoch"],
+                        "curr_loss": feedbacker_cache["loss"],
+                        "curr_batch_size": config["batchSize"],
+                        "curr_lr": config["learningRate"],
+                        "loss_history": feedbacker_cache["loss_history"]
+                    }
+                }));
+            })
+            ws.on("close", function(){
+                console.log("[Webui] A client disconnected.")
+            })
+
+            feedbacker = function(epoch, loss, loss_history){
+                feedbacker_cache["epoch"] = epoch
+                feedbacker_cache["loss"] = loss
+                feedbacker_cache["loss_history"] = loss_history
+                var clients = Array.from(ws.clients); // convert Set to array
+                for (var i = 0; i < clients.length; i++) {
+                    if (clients[i].readyState === WebSocket.OPEN) {
+                        clients[i].send(JSON.stringify({
+                            "type": "epoch_update",
+                            "data": {
+                                "curr_epoch": epoch,
+                                "curr_loss": loss,
+                                "curr_batch_size": config["batchSize"],
+                                "curr_lr": config["learningRate"],
+                                "loss_history": loss_history
+                            }
+                        }));
+                    }
+                }
+            }
+
+            var server = require("http").createServer(function(req, res){
+                var file;
+                try{
+                    if (req.url === "/"){
+                        file = require("fs").readFileSync(__dirname + "/webui/index.html")
+                    }
+                    else{
+                        file = require("fs").readFileSync(__dirname + "/webui/" + req.url)
+                    }
+                }
+                catch (error){
+                    res.writeHead(404, { "Content-Type": "text/plain" });
+                    res.end("404 Not Found");
+                    return
+                }
+                if (req.url.endsWith(".html")){
+                    var contentType = "text/html"
+                }
+                else{
+                    if (req.url.endsWith(".otf")){
+                        var contentType = "font/otf"
+                    }
+                    else{
+                        if (req.url.endsWith(".js")){
+                            var contentType = "application/javascript"
+                            file = "var ws_port_ = " + port + ";\n\n" + file
+                        }
+                    }
+                }
+                if (req.url === "/"){
+                    contentType = "text/html"
+                }
+                if (contentType == undefined){
+                    var contentType = "application/octet-stream"
+                }
+                res.writeHead(200, { "Content-Type": contentType });
+                res.end(file)
+            })
+            server.listen(0, function(){
+                var port_http = server.address().port;
+
+                console.log("-----------------------------------------------------")
+                console.log("Webui is running at http://localhost:" + port_http)
+                console.log("-----------------------------------------------------")
+
+                console.log("")
+                console.log("Because you are running in webui mode as you appended the --webui flag, we will wait 30 seconds before proceeding to let you copy the link and open the webui. As soon as you open the webui or the 30 seconds timeout is expired we will proceed.")
+
+                
+            })
+        })
+        for (var index = 0; index < 30000; index++){
+            await wait(1)
+            if (anyclient){
+                console.log("A client connected to the webui, proceeding.")
+                break;
+            }
+        }
     }
 
     class Transformer {
@@ -4881,6 +5118,7 @@ var resolveDependency = async function(dependency){
                     }
                     var should_prompt = !is_best_loss;
                     if (is_best_loss || should_prompt) {
+                        feedbacker(epoch, avg_epoch_loss, loss_history)
                         var result = await this.interactive_test_loop(epoch, avg_epoch_loss, optimizer, loss_history, best_loss)
                         if (result === "STOP_TRAINING") {
                             break;
@@ -5112,6 +5350,7 @@ var resolveDependency = async function(dependency){
                         ndprint(`Epoch ${epoch + 1}: No training steps counted.`);
                 }
                 ndprint("-".repeat(60)); // Optional separator
+                feedbacker(epoch, avg_epoch_loss, loss_history)
                 var result = await this.interactive_test_loop(epoch, epoch_losses.length ? avg_loss : 0.0, optimizer, loss_history, best_loss);
                 if (result === "STOP_TRAINING") {
                     break;

@@ -1,4 +1,4 @@
-# Cleanai 2.0.4
+# Cleanai 2.1.0 Nightly
 ## What is this?
 This is a project of mine that as of 28.05.2025 I've been working on for about 4 months (since 27.01.2025). This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization, readline-sync for the interactive console mode, uuid for random string generation, zip librairies (archiver and yauzl) to load/save models and ws for future remote device support. No ml (machine learning) librairies like pytorch or tensorflow. Only pure raw javascript and no abstractions.
 
@@ -49,6 +49,8 @@ Refer to the <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/
 - 1.0.0 — Original release.
 
 ## Nightly versions (only github)
+### Nightly versions before 2.1.0 stable:
+- 2.1.0 Nightly — Added early beta of webui to monitor training and pre-training runs.
 ### Nightly versions before 2.0.0 stable:
 <strong>Note</strong>: Next Nightly version (2.0.0 Nightly 4) will be uploaded as a nightly then directly as a stable as it will aim to break into chunks some of the functions in worker.js to stop running out of turbofan zone memory which would have for effect to allow me to remove the --no-opt flag from the worker spawn and therefore boost the speed by about 30% which would make the local multithreading as good as it can be and therefore make it a stable version. << This was a very bad idea and made the code about 339% slower, for this 2.0.0 Nightly 4, I simply realized everything was perfect, added a safety check for the optional noSweetSpotSaving config option and shipped.
 - 2.0.0 Nightly 4 — Added safety check for optional noSweetSpotSaving config option.
