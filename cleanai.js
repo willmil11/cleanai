@@ -5881,6 +5881,7 @@ var resolveDependency = async function(dependency){
             ndprint("  /stop            Stop training");
             ndprint("  /save [path]     Save model (optional path, default is model_optimizer.zip)");
             ndprint("  /switch_to_*     Switch optimizer (sgd, adam, sgd_momentum)");
+            ndprint("  /learning_rate X Change learning rate")
             //ndprint("  /batchSize X     Set or view batch size");
             ndprint("  /temperature X   Set or view temperature");
             ndprint("  /info            Show current training info");
@@ -5923,7 +5924,38 @@ var resolveDependency = async function(dependency){
                     } else {
                         ndprint("[Error] Unknown optimizer.");
                     }
-                } 
+                }
+                else if (user_input.startsWith("/learning_rate")){
+                    var stuff = user_input.slice("/learning_rate".length)
+                    if (stuff === ""){
+                        console.log("You need to specify a new learning rate.")
+                    }
+                    else{
+                        if (stuff.startsWith(" ")){
+                            stuff = stuff.slice(1)
+                            var newLr = parseFloat(stuff)
+                            if (Number.isNaN(newLr)){
+                                console.log("Invalid new learning rate.")
+                            }
+                            else{
+                                if ((newLr.toString().includes("-"))){
+                                    console.log("Invalid new learning rate.")
+                                }
+                                else{
+                                    if (newLr === 0){
+                                        console.log("Invalid new learning rate.")
+                                    }
+                                    else{
+                                        var oldLr = this.learningRate
+                                        this.learningRate = newLr
+                                        config["learningRate"] = newLr
+                                        console.log("Learning rate, " + oldLr + " >> " + newLr)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 // else if (user_input.indexOf("/batchSize") === 0) {
                 //     var parts = user_input.split(" ", 2);
                 //     if (parts.length < 2) {
