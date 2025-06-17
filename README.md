@@ -1,6 +1,6 @@
-# Cleanai 2.1.0 Nightly 2
+# Cleanai 2.1.0 Nightly 3
 ## What is this?
-This is a project of mine that as of 28.05.2025 I've been working on for about 4 months (since 27.01.2025). This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization, readline-sync for the interactive console mode, uuid for random string generation, zip librairies (archiver and yauzl) to load/save models and ws for future remote device support. No ml (machine learning) librairies like pytorch or tensorflow. Only pure raw javascript and no abstractions.
+This is a project of mine that as of 16.06.2025 I've been working on for about 5 months (since 27.01.2025). This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization, readline-sync for the interactive console mode, uuid for random string generation, zip librairies (archiver and yauzl) to load/save models and ws for future remote device support. No ml (machine learning) librairies like pytorch or tensorflow. Only pure raw javascript and no abstractions.
 
 ## How do I use it
 Look at the guide: <a href="https://github.com/willmil11/cleanai/blob/main/guide.md">guide</a>
@@ -50,6 +50,7 @@ Refer to the <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/
 
 ## Nightly versions (only github)
 ### Nightly versions before 2.1.0 stable:
+- 2.1.0 Nightly 3 — Fixed readme.
 - 2.1.0 Nightly 2 — Added ```/learning_rate <lr>``` to change learning rate during interactive mode.
 - 2.1.0 Nightly — Added early beta of webui to monitor training and pre-training runs.
 ### Nightly versions before 2.0.0 stable:
