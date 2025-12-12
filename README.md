@@ -1,4 +1,4 @@
-# Cleanai 2.1.0 Nightly 3
+# Cleanai 2.1.0 Nightly 3 (+dec 12 2025 readme edit)
 ## What is this?
 This is a project of mine that as of 16.06.2025 I've been working on for about 5 months (since 27.01.2025). This is a transformer architecture with pre-training and training implemented in pure javascript. It only requires tiktoken for tokenization, readline-sync for the interactive console mode, uuid for random string generation, zip librairies (archiver and yauzl) to load/save models and ws for future remote device support. No ml (machine learning) librairies like pytorch or tensorflow. Only pure raw javascript and no abstractions.
 
@@ -7,6 +7,8 @@ Look at the guide: <a href="https://github.com/willmil11/cleanai/blob/main/guide
 
 ## Can I use this to train my AI?
 Absolutely, normally it should be as fast as pytorch or tensorflow for cpu only training/pre-training/inference. It will work and it will be easier to use than tensorflow or pytorch too.
+<br>
+<strong>Dec. 12 2025 edit:</strong> This was a lie. Use my <a href="https://github.com/willmil11/cleanai-c">new version made in c</a> (still no ml libs) which is way closer in speed to pytorch and tensorflow (cpu only for now) and is superior in every way to the js version you're currently on including architecture, ux, ui and more.
 
 ## Pytorch and tensorflow already exist, why would I use this?
 Because:
@@ -32,6 +34,8 @@ To support this project you can star the repo and you can send me suggestions th
 
 ## Who am I and what does this project mean to me?
 I'm William, a 14 yo french programmer and this is my most ambitious project yet. It took an insane amount of planning, coding and debugging but it was sooo worth it.
+<br>
+Dec. 12 2025 edit: Now 15yo
 
 ## Github repo
 If you're on the npm page, check out and perhaps star the <a href="https://github.com/willmil11/cleanai">repo</a>
@@ -50,6 +54,7 @@ Refer to the <a href="https://github.com/willmil11/cleanai/blob/main/deprecated/
 
 ## Nightly versions (only github)
 ### Nightly versions before 2.1.0 stable:
+- 2.1.0 Nightly 3 (+dec 12 2025 readme edit) — Edited readme.
 - 2.1.0 Nightly 3 — Fixed readme.
 - 2.1.0 Nightly 2 — Added ```/learning_rate <lr>``` to change learning rate during interactive mode.
 - 2.1.0 Nightly — Added early beta of webui to monitor training and pre-training runs.
