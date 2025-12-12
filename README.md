@@ -7,7 +7,7 @@ Look at the guide: <a href="https://github.com/willmil11/cleanai/blob/main/guide
 
 ## Can I use this to train my AI?
 Absolutely, normally it should be as fast as pytorch or tensorflow for cpu only training/pre-training/inference. It will work and it will be easier to use than tensorflow or pytorch too.
-<br>
+<br><br>
 <strong>Dec. 12 2025 edit:</strong> This was a lie. Use my <a href="https://github.com/willmil11/cleanai-c">new version made in c</a> (still no ml libs) which is way closer in speed to pytorch and tensorflow (cpu only for now) and is superior in every way to the js version you're currently on including architecture, ux, ui and more.
 
 ## Pytorch and tensorflow already exist, why would I use this?
@@ -34,8 +34,8 @@ To support this project you can star the repo and you can send me suggestions th
 
 ## Who am I and what does this project mean to me?
 I'm William, a 14 yo french programmer and this is my most ambitious project yet. It took an insane amount of planning, coding and debugging but it was sooo worth it.
-<br>
-Dec. 12 2025 edit: Now 15yo
+<br><br>
+<strong>Dec. 12 2025 edit:</strong> Now 15yo
 
 ## Github repo
 If you're on the npm page, check out and perhaps star the <a href="https://github.com/willmil11/cleanai">repo</a>
